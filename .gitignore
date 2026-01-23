@@ -1,0 +1,19 @@
+# Data files (Parquet exports)
+data/*.parquet
+
+# Rust
+backend/target/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

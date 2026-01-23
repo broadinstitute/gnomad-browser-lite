@@ -11,6 +11,7 @@ export interface GridColumn<T> {
   grow?: number;
   isSortable?: boolean;
   isRowHeader?: boolean;
+  align?: 'left' | 'center' | 'right';
   render: (row: T, key: string, cellData: Record<string, unknown>) => React.ReactNode;
 }
 
@@ -43,6 +44,8 @@ const GridHorizontalViewport = styled.div`
   overflow-x: auto;
 `;
 
+const SCROLLBAR_WIDTH = 17; // Account for scrollbar in virtualized list
+
 const HeaderRow = styled.div`
   display: flex;
   flex-direction: row;
@@ -51,13 +54,14 @@ const HeaderRow = styled.div`
   background: #fafafa;
 `;
 
-const ColumnHeader = styled.div<{ $width: number; $sortable?: boolean; $sorted?: boolean }>`
+const ColumnHeader = styled.div<{ $width: number; $sortable?: boolean; $sorted?: boolean; $align?: 'left' | 'center' | 'right' }>`
   display: flex;
   flex-shrink: 0;
   align-items: center;
+  justify-content: ${props => props.$align === 'right' ? 'flex-end' : props.$align === 'center' ? 'center' : 'flex-start'};
   box-sizing: border-box;
   width: ${props => props.$width}px;
-  padding: 8px 12px;
+  padding: 6px 8px;
   font-weight: 600;
   font-size: 13px;
   color: #333;
@@ -101,13 +105,14 @@ const DataRowWrapper = styled.div<{ $highlighted?: boolean; $striped?: boolean }
   }
 `;
 
-const DataCell = styled.div<{ $width: number }>`
+const DataCell = styled.div<{ $width: number; $align?: 'left' | 'center' | 'right' }>`
   display: flex;
   flex-shrink: 0;
   align-items: center;
+  justify-content: ${props => props.$align === 'right' ? 'flex-end' : props.$align === 'center' ? 'center' : 'flex-start'};
   box-sizing: border-box;
   width: ${props => props.$width}px;
-  padding: 6px 12px;
+  padding: 4px 8px;
   overflow: hidden;
 `;
 
@@ -145,7 +150,7 @@ function Row<T>({ index, style, data }: RowProps<T>) {
       onMouseEnter={() => onMouseEnter(index)}
     >
       {columns.map((column, colIndex) => (
-        <DataCell key={column.key} $width={columnWidths[colIndex]}>
+        <DataCell key={column.key} $width={columnWidths[colIndex]} $align={column.align}>
           {column.render(row, column.key, cellData)}
         </DataCell>
       ))}
@@ -196,22 +201,23 @@ function GridInner<T>(
     },
   }));
 
-  // Calculate column widths
+  // Calculate column widths (subtract scrollbar width from available space)
   const columns = inputColumns.map(col => ({
     grow: 1,
     minWidth: 100,
     ...col,
   }));
 
+  const availableWidth = containerWidth - SCROLLBAR_WIDTH;
   const minGridWidth = columns.reduce((sum, col) => sum + (col.minWidth || 100), 0);
-  const remainingWidth = Math.max(containerWidth - minGridWidth, 0);
+  const remainingWidth = Math.max(availableWidth - minGridWidth, 0);
   const totalGrowFactors = columns.reduce((sum, col) => sum + (col.grow || 1), 0) || 1;
 
   const columnWidths = columns.map(
     col => (col.minWidth || 100) + ((col.grow || 1) / totalGrowFactors) * remainingWidth
   );
 
-  const gridWidth = Math.max(containerWidth, minGridWidth);
+  const gridWidth = Math.max(availableWidth, minGridWidth);
 
   // Handle row hover
   const handleMouseEnter = useCallback((index: number) => {
@@ -240,6 +246,7 @@ function GridInner<T>(
               $width={columnWidths[index]}
               $sortable={column.isSortable}
               $sorted={column.key === sortKey}
+              $align={column.align}
               onClick={() => column.isSortable && onRequestSort?.(column.key)}
               title={column.tooltip}
             >
@@ -257,7 +264,7 @@ function GridInner<T>(
           height={numRowsRendered * rowHeight}
           itemCount={data.length}
           itemSize={rowHeight}
-          width={gridWidth}
+          width={gridWidth + SCROLLBAR_WIDTH}
           itemKey={(index) => rowKey(data[index])}
           itemData={{
             items: data,
@@ -268,6 +275,7 @@ function GridInner<T>(
             shouldHighlightRow,
           }}
           onItemsRendered={handleItemsRendered}
+          style={{ overflowX: 'hidden' }}
         >
           {Row as React.ComponentType<RowProps<T>>}
         </List>

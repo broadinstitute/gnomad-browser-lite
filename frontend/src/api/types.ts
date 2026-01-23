@@ -1,5 +1,18 @@
 // Types for gnomAD Browser Lite
 
+export interface Exon {
+  feature_type: 'CDS' | 'UTR' | 'exon';
+  start: number;
+  stop: number;
+}
+
+export interface Transcript {
+  transcript_id: string;
+  start?: number;
+  stop?: number;
+  exons: Exon[];
+}
+
 export interface Gene {
   gene_id: string;
   gene_symbol?: string;
@@ -9,6 +22,9 @@ export interface Gene {
   stop: number;
   strand?: string;
   canonical_transcript_id?: string;
+  transcripts?: Transcript[];
+  // Convenience: canonical transcript exons (populated from gnomAD API)
+  exons?: Exon[];
 }
 
 // Helper to get gene symbol (handles both field names)

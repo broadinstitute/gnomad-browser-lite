@@ -1,11 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { api } from '../api/client';
-import type { Gene, Variant } from '../api/types';
+import type { Gene, Variant, Exon } from '../api/types';
 import { getGeneSymbol } from '../api/types';
 import { VariantsTable } from '../components/VariantsTable';
 import { GenomeBrowser } from '../components/GenomeBrowser';
+import {
+  VariantFilterControls,
+  DEFAULT_VARIANT_FILTER,
+  filterVariants,
+  type VariantFilter,
+} from '../components/VariantFilterControls';
 
 const Container = styled.div`
   max-width: 1400px;
@@ -93,12 +99,35 @@ const Breadcrumb = styled.nav`
   }
 `;
 
+// Helper to check if a position falls within any exon region
+function isInExonRegion(pos: number, exons: Exon[]): boolean {
+  return exons.some(exon => pos >= exon.start && pos <= exon.stop);
+}
+
 export function GenePage() {
   const { geneId } = useParams<{ geneId: string }>();
   const [gene, setGene] = useState<Gene | null>(null);
   const [variants, setVariants] = useState<Variant[]>([]);
+  const [exons, setExons] = useState<Exon[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<VariantFilter>(DEFAULT_VARIANT_FILTER);
+  const [showIntrons, setShowIntrons] = useState(false); // Default: hide introns
+
+  // Filter variants based on filter state and exon visibility
+  const filteredVariants = useMemo(() => {
+    let result = filterVariants(variants, filter);
+
+    // Also filter by exon regions if introns are hidden
+    if (!showIntrons && exons.length > 0) {
+      result = result.filter(v => {
+        const pos = v.pos || v.locus?.position || 0;
+        return isInExonRegion(pos, exons);
+      });
+    }
+
+    return result;
+  }, [variants, filter, showIntrons, exons]);
 
   useEffect(() => {
     if (!geneId) return;
@@ -111,6 +140,14 @@ export function GenePage() {
         const response = await api.getGeneVariants(geneId);
         setGene(response.gene);
         setVariants(response.variants);
+
+        // Fetch exon data from gnomAD API
+        const geneSymbol = response.gene.gene_symbol || response.gene.gencode_symbol || geneId;
+        const fetchedExons = await api.fetchExonsFromGnomAD(
+          geneSymbol,
+          response.gene.canonical_transcript_id
+        );
+        setExons(fetchedExons);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load gene data');
       } finally {
@@ -209,16 +246,29 @@ export function GenePage() {
       </div>
 
       {variants.length > 0 && (
-        <GenomeBrowser
-          gene={gene}
-          variants={variants}
-        />
+        <>
+          <GenomeBrowser
+            gene={gene}
+            variants={filteredVariants}
+            exons={exons}
+            showIntrons={showIntrons}
+            onShowIntronsChange={setShowIntrons}
+          />
+          <VariantFilterControls value={filter} onChange={setFilter} />
+        </>
       )}
 
-      <SectionTitle>Variants ({variants.length.toLocaleString()})</SectionTitle>
+      <SectionTitle>
+        Variants ({filteredVariants.length.toLocaleString()}
+        {filteredVariants.length !== variants.length && (
+          <span style={{ fontWeight: 'normal', fontSize: '0.9rem', color: '#666' }}>
+            {' '}of {variants.length.toLocaleString()} total
+          </span>
+        )})
+      </SectionTitle>
 
       {variants.length > 0 ? (
-        <VariantsTable variants={variants} />
+        <VariantsTable variants={filteredVariants} />
       ) : (
         <LoadingMessage>No variants found in this gene region.</LoadingMessage>
       )}

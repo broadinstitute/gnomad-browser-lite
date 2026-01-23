@@ -138,7 +138,7 @@ const createColumns = (): GridColumn<Variant>[] => [
   {
     key: 'variant_id',
     heading: 'Variant ID',
-    minWidth: 180,
+    minWidth: 120,
     grow: 1,
     isSortable: true,
     isRowHeader: true,
@@ -153,8 +153,8 @@ const createColumns = (): GridColumn<Variant>[] => [
   {
     key: 'hgvs',
     heading: 'HGVS Consequence',
-    minWidth: 140,
-    grow: 1,
+    minWidth: 100,
+    grow: 0,
     isSortable: true,
     render: (row) => (
       <Cell title={row.hgvsc || row.hgvsp || ''}>
@@ -165,7 +165,7 @@ const createColumns = (): GridColumn<Variant>[] => [
   {
     key: 'consequence',
     heading: 'VEP Annotation',
-    minWidth: 160,
+    minWidth: 100,
     grow: 0,
     isSortable: true,
     render: (row) => (
@@ -178,7 +178,7 @@ const createColumns = (): GridColumn<Variant>[] => [
   {
     key: 'rsid',
     heading: 'rsIDs',
-    minWidth: 120,
+    minWidth: 70,
     grow: 0,
     isSortable: false,
     render: (row) => {
@@ -192,11 +192,12 @@ const createColumns = (): GridColumn<Variant>[] => [
   },
   {
     key: 'ac',
-    heading: 'Allele Count',
-    tooltip: 'Alternate allele count in high quality genotypes',
-    minWidth: 100,
+    heading: 'AC',
+    tooltip: 'Allele Count - Alternate allele count in high quality genotypes',
+    minWidth: 70,
     grow: 0,
     isSortable: true,
+    align: 'right',
     render: (row) => (
       <NumericCell>
         {row.ac != null ? row.ac.toLocaleString() : ''}
@@ -205,11 +206,12 @@ const createColumns = (): GridColumn<Variant>[] => [
   },
   {
     key: 'an',
-    heading: 'Allele Number',
-    tooltip: 'Total number of called high quality genotypes',
-    minWidth: 110,
+    heading: 'AN',
+    tooltip: 'Allele Number - Total number of called high quality genotypes',
+    minWidth: 70,
     grow: 0,
     isSortable: true,
+    align: 'right',
     render: (row) => (
       <NumericCell>
         {row.an != null ? row.an.toLocaleString() : ''}
@@ -218,11 +220,12 @@ const createColumns = (): GridColumn<Variant>[] => [
   },
   {
     key: 'af',
-    heading: 'Allele Frequency',
-    tooltip: 'Alternate allele frequency in high quality genotypes',
-    minWidth: 120,
-    grow: 0,
+    heading: 'AF',
+    tooltip: 'Allele Frequency - Alternate allele frequency in high quality genotypes',
+    minWidth: 90,
+    grow: 1,
     isSortable: true,
+    align: 'right',
     render: (row) => renderAlleleFrequencyCell(row as unknown as Record<string, unknown>, 'af'),
   },
 ];

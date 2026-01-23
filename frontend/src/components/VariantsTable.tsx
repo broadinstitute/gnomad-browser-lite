@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import type { Variant } from '../api/types';
 import { Grid, Cell, NumericCell, renderAlleleFrequencyCell } from './Grid';
@@ -36,9 +37,9 @@ const Stats = styled.div`
   font-size: 14px;
 `;
 
-const VariantLink = styled.span`
+const VariantLink = styled(Link)`
   color: #185da8;
-  cursor: pointer;
+  text-decoration: none;
 
   &:hover {
     text-decoration: underline;
@@ -144,7 +145,7 @@ const createColumns = (): GridColumn<Variant>[] => [
     isRowHeader: true,
     render: (row) => (
       <Cell>
-        <VariantLink title={getVariantId(row)}>
+        <VariantLink to={`/variant/${getVariantId(row)}`} title={getVariantId(row)}>
           {getVariantId(row)}
         </VariantLink>
       </Cell>

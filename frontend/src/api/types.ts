@@ -106,3 +106,90 @@ export interface SearchResponse {
   results: SearchResult[];
   total: number;
 }
+
+// ==================== Variant Detail Types ====================
+
+export interface Population {
+  id: string;
+  ac: number;
+  an: number;
+  homozygote_count: number;
+  hemizygote_count: number;
+}
+
+export interface TranscriptConsequence {
+  gene_id: string;
+  gene_symbol: string;
+  transcript_id: string;
+  transcript_version?: string;
+  consequence_terms: string[];
+  major_consequence: string;
+  hgvsc?: string;
+  hgvsp?: string;
+  is_canonical?: boolean;
+  is_mane_select?: boolean;
+  is_mane_select_version?: boolean;
+  lof?: string;
+  lof_filter?: string;
+  lof_flags?: string;
+  domains?: string[];
+  refseq_id?: string;
+  biotype?: string;
+}
+
+export interface InSilicoPredictors {
+  cadd?: { phred: number; raw_score: number };
+  revel_max?: number;
+  spliceai_ds_max?: number;
+  pangolin_largest_ds?: number;
+  phylop?: number;
+  sift_max?: number;
+  polyphen_max?: number;
+}
+
+export interface VariantDetails extends Variant {
+  caid?: string;
+
+  // Joint frequencies structure from Parquet
+  joint?: {
+    freq?: {
+      all?: {
+        ac: number;
+        an: number;
+        homozygote_count: number;
+        hemizygote_count: number;
+        ancestry_groups?: Population[];
+      };
+    };
+    grpmax?: {
+      ac: number;
+      an: number;
+      af?: number;
+      gen_anc: string;
+    };
+    fafmax?: {
+      faf95_max: number;
+      faf95_max_gen_anc: string;
+    };
+    flags?: string[];
+  };
+
+  transcript_consequences?: TranscriptConsequence[];
+  in_silico_predictors?: InSilicoPredictors;
+
+  coverage?: {
+    genome?: {
+      mean?: number;
+      median_approx?: number;
+      over_1?: number;
+      over_5?: number;
+      over_10?: number;
+      over_15?: number;
+      over_20?: number;
+      over_25?: number;
+      over_30?: number;
+      over_50?: number;
+      over_100?: number;
+    };
+  };
+}

@@ -68,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/gene/:gene_id/variants", get(get_gene_variants))
         .route("/api/region/:region_id", get(get_region_variants))
         .route("/api/search", get(search_genes))
+        .route("/api/variant/:variant_id", get(get_variant_detail))
         .route("/api/schema/:table", get(get_table_schema))
         .layer(cors)
         .with_state(state);
@@ -281,6 +282,28 @@ async fn search_genes(
         }))),
         Err(e) => {
             tracing::error!("Error searching genes: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            ))
+        }
+    }
+}
+
+/// Get variant detail by ID
+/// GET /api/variant/:variant_id
+async fn get_variant_detail(
+    State(state): State<AppState>,
+    Path(variant_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match state.db.get_variant(&variant_id) {
+        Ok(Some(variant)) => Ok(Json(variant)),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Variant not found", "variant_id": variant_id })),
+        )),
+        Err(e) => {
+            tracing::error!("Error fetching variant {}: {}", variant_id, e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": e.to_string() })),

@@ -282,6 +282,67 @@ impl Database {
         Ok(results)
     }
 
+    /// Get detailed variant data by variant_id
+    pub fn get_variant(&self, variant_id: &str) -> Result<Option<Value>> {
+        let conn = self.conn.lock().unwrap();
+
+        // Use to_json() for complex nested structures
+        let sql = r#"
+            SELECT
+                variant_id,
+                locus.contig AS chrom,
+                locus.position AS pos,
+                to_json(alleles) AS alleles,
+                to_json(rsids) AS rsids,
+                caid,
+                to_json(transcript_consequences) AS transcript_consequences,
+                to_json(in_silico_predictors) AS in_silico_predictors,
+                to_json(joint) AS joint,
+                to_json(coverage) AS coverage
+            FROM variants
+            WHERE variant_id = ?
+        "#;
+
+        let mut stmt = conn.prepare(sql).context("Failed to prepare variant query")?;
+
+        let result = stmt.query_row(params![variant_id], |row| {
+            let column_count = row.as_ref().column_count();
+            let mut map = serde_json::Map::new();
+
+            for i in 0..column_count {
+                let column_name = row.as_ref().column_name(i).map_or("unknown", |s| s.as_str());
+
+                if let Ok(val) = row.get::<_, String>(i) {
+                    // Try to parse as JSON if it looks like it (starts with { or [)
+                    if val.starts_with('{') || val.starts_with('[') {
+                        if let Ok(json_val) = serde_json::from_str(&val) {
+                            map.insert(column_name.to_string(), json_val);
+                            continue;
+                        }
+                    }
+                    map.insert(column_name.to_string(), Value::String(val));
+                } else if let Ok(val) = row.get::<_, i64>(i) {
+                    map.insert(column_name.to_string(), Value::Number(val.into()));
+                } else if let Ok(val) = row.get::<_, f64>(i) {
+                    if let Some(n) = serde_json::Number::from_f64(val) {
+                        map.insert(column_name.to_string(), Value::Number(n));
+                    }
+                } else if let Ok(val) = row.get::<_, bool>(i) {
+                    map.insert(column_name.to_string(), Value::Bool(val));
+                } else {
+                    map.insert(column_name.to_string(), Value::Null);
+                }
+            }
+            Ok(Value::Object(map))
+        });
+
+        match result {
+            Ok(val) => Ok(Some(val)),
+            Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("Query error: {}", e)),
+        }
+    }
+
     /// Get schema information for debugging
     pub fn get_schema(&self, table: &str) -> Result<Vec<(String, String)>> {
         let conn = self.conn.lock().unwrap();

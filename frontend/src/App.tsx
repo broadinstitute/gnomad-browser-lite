@@ -3,6 +3,7 @@ import styled, { createGlobalStyle } from 'styled-components';
 import { HomePage } from './pages/HomePage';
 import { GenePage } from './pages/GenePage';
 import { RegionPage } from './pages/RegionPage';
+import { VariantPage } from './pages/VariantPage';
 
 const GlobalStyle = createGlobalStyle`
   * {
@@ -80,6 +81,7 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/gene/:geneId" element={<GenePage />} />
           <Route path="/region/:regionId" element={<RegionPage />} />
+          <Route path="/variant/:variantId" element={<VariantPage />} />
         </Routes>
       </main>
     </BrowserRouter>

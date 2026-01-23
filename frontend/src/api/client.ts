@@ -6,6 +6,7 @@ import type {
   RegionVariantsResponse,
   SearchResponse,
   Exon,
+  VariantDetails,
 } from './types';
 
 const GNOMAD_API_URL = 'https://gnomad.broadinstitute.org/api';
@@ -45,6 +46,16 @@ export const api = {
   async getRegionVariants(region: string): Promise<RegionVariantsResponse> {
     return fetchJson<RegionVariantsResponse>(
       `${API_BASE}/api/region/${encodeURIComponent(region)}`
+    );
+  },
+
+  /**
+   * Get detailed variant data by variant ID
+   * @param variantId - Format: chr17-43044003-C-T
+   */
+  async getVariant(variantId: string): Promise<VariantDetails> {
+    return fetchJson<VariantDetails>(
+      `${API_BASE}/api/variant/${encodeURIComponent(variantId)}`
     );
   },
 

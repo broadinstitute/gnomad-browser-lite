@@ -1,238 +1,363 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import styled from 'styled-components';
 import type { Variant } from '../api/types';
+import { Grid, Cell, NumericCell, renderAlleleFrequencyCell } from './Grid';
+import type { GridColumn, GridRef } from './Grid';
 
 const TableContainer = styled.div`
-  overflow-x: auto;
   margin-top: 1rem;
 `;
 
-const Table = styled.table`
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-`;
-
-const Th = styled.th`
-  background: #f5f5f5;
-  border: 1px solid #ddd;
-  padding: 8px 12px;
-  text-align: left;
-  position: sticky;
-  top: 0;
-  cursor: pointer;
-  user-select: none;
-
-  &:hover {
-    background: #e8e8e8;
-  }
-`;
-
-const Td = styled.td`
-  border: 1px solid #ddd;
-  padding: 8px 12px;
-  white-space: nowrap;
-`;
-
-const Tr = styled.tr`
-  &:nth-child(even) {
-    background: #fafafa;
-  }
-
-  &:hover {
-    background: #f0f0f0;
-  }
-`;
-
-const FilterInput = styled.input`
-  width: 100%;
-  padding: 8px;
+const TableHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+`;
+
+const SearchInput = styled.input`
+  width: 300px;
+  padding: 8px 12px;
   border: 1px solid #ddd;
   border-radius: 4px;
   font-size: 14px;
+
+  &:focus {
+    outline: none;
+    border-color: #4a90d9;
+    box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
+  }
 `;
 
 const Stats = styled.div`
-  margin-bottom: 1rem;
   color: #666;
   font-size: 14px;
 `;
 
+const VariantLink = styled.span`
+  color: #185da8;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+`;
+
+const ConsequenceMarker = styled.span<{ $color: string }>`
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: ${props => props.$color};
+  margin-right: 6px;
+`;
+
+const RsidCell = styled(Cell)`
+  color: #185da8;
+`;
+
 interface VariantsTableProps {
   variants: Variant[];
+  highlightedVariantId?: string;
+  onHoverVariant?: (variantId: string | null) => void;
+}
+
+// Consequence category colors (matching gnomAD)
+const categoryColors: Record<string, string> = {
+  lof: '#DD2C00',
+  missense: 'orange',
+  synonymous: '#2E7D32',
+  other: '#424242',
+};
+
+function getConsequenceCategory(consequence: string | undefined): string {
+  if (!consequence) return 'other';
+  const lower = consequence.toLowerCase();
+
+  if (lower.includes('frameshift') ||
+      lower.includes('stop_gained') ||
+      lower.includes('splice_acceptor') ||
+      lower.includes('splice_donor') ||
+      lower.includes('start_lost') ||
+      lower.includes('stop_lost')) {
+    return 'lof';
+  }
+  if (lower.includes('missense') || lower.includes('inframe')) {
+    return 'missense';
+  }
+  if (lower.includes('synonymous')) {
+    return 'synonymous';
+  }
+  return 'other';
+}
+
+function getConsequenceColor(consequence: string | undefined): string {
+  const category = getConsequenceCategory(consequence);
+  return categoryColors[category] || categoryColors.other;
+}
+
+function formatConsequence(consequence: string | undefined): string {
+  if (!consequence) return '';
+  // Convert snake_case to Title Case
+  return consequence
+    .split('_')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
 }
 
 function getVariantId(v: Variant): string {
   if (v.variant_id) return v.variant_id;
-  const locus = v.locus || {};
-  const chrom = locus.contig || v.contig || '';
-  const pos = locus.position || v.position || 0;
+  const chrom = v.chrom || v.locus?.contig || '';
+  const pos = v.pos || v.locus?.position || 0;
   const alleles = v.alleles || [];
   return `${chrom}-${pos}-${alleles.join('-')}`;
 }
 
-function getFrequency(v: Variant): number | null {
-  if (v.af !== undefined) return v.af;
-  if (v.freq?.AF !== undefined) return v.freq.AF;
-  if (v.ac !== undefined && v.an !== undefined && v.an > 0) {
-    return v.ac / v.an;
+function getPosition(v: Variant): number | undefined {
+  return v.pos || v.locus?.position;
+}
+
+function getRsid(v: Variant): string | undefined {
+  if (v.rsids && v.rsids.length > 0) {
+    return v.rsids[0];
   }
-  if (v.freq?.AC !== undefined && v.freq?.AN !== undefined && v.freq.AN > 0) {
-    return v.freq.AC / v.freq.AN;
+  return v.rsid;
+}
+
+function getRsids(v: Variant): string[] {
+  if (v.rsids && v.rsids.length > 0) {
+    return v.rsids;
   }
-  return null;
+  return v.rsid ? [v.rsid] : [];
 }
 
-function formatFrequency(af: number | null): string {
-  if (af === null) return '-';
-  if (af === 0) return '0';
-  if (af < 0.0001) return af.toExponential(2);
-  return af.toFixed(6);
+// Define columns
+const createColumns = (): GridColumn<Variant>[] => [
+  {
+    key: 'variant_id',
+    heading: 'Variant ID',
+    minWidth: 180,
+    grow: 1,
+    isSortable: true,
+    isRowHeader: true,
+    render: (row) => (
+      <Cell>
+        <VariantLink title={getVariantId(row)}>
+          {getVariantId(row)}
+        </VariantLink>
+      </Cell>
+    ),
+  },
+  {
+    key: 'hgvs',
+    heading: 'HGVS Consequence',
+    minWidth: 140,
+    grow: 1,
+    isSortable: true,
+    render: (row) => (
+      <Cell title={row.hgvsc || row.hgvsp || ''}>
+        {row.hgvsc || row.hgvsp || ''}
+      </Cell>
+    ),
+  },
+  {
+    key: 'consequence',
+    heading: 'VEP Annotation',
+    minWidth: 160,
+    grow: 0,
+    isSortable: true,
+    render: (row) => (
+      <Cell>
+        <ConsequenceMarker $color={getConsequenceColor(row.consequence)} />
+        {formatConsequence(row.consequence)}
+      </Cell>
+    ),
+  },
+  {
+    key: 'rsid',
+    heading: 'rsIDs',
+    minWidth: 120,
+    grow: 0,
+    isSortable: false,
+    render: (row) => {
+      const rsids = getRsids(row);
+      return (
+        <RsidCell title={rsids.join(', ')}>
+          {rsids.join(', ') || ''}
+        </RsidCell>
+      );
+    },
+  },
+  {
+    key: 'ac',
+    heading: 'Allele Count',
+    tooltip: 'Alternate allele count in high quality genotypes',
+    minWidth: 100,
+    grow: 0,
+    isSortable: true,
+    render: (row) => (
+      <NumericCell>
+        {row.ac != null ? row.ac.toLocaleString() : ''}
+      </NumericCell>
+    ),
+  },
+  {
+    key: 'an',
+    heading: 'Allele Number',
+    tooltip: 'Total number of called high quality genotypes',
+    minWidth: 110,
+    grow: 0,
+    isSortable: true,
+    render: (row) => (
+      <NumericCell>
+        {row.an != null ? row.an.toLocaleString() : ''}
+      </NumericCell>
+    ),
+  },
+  {
+    key: 'af',
+    heading: 'Allele Frequency',
+    tooltip: 'Alternate allele frequency in high quality genotypes',
+    minWidth: 120,
+    grow: 0,
+    isSortable: true,
+    render: (row) => renderAlleleFrequencyCell(row as unknown as Record<string, unknown>, 'af'),
+  },
+];
+
+// Sort comparison functions
+function compareValues<T>(a: T, b: T, ascending: boolean): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return ascending ? 1 : -1;
+  if (b == null) return ascending ? -1 : 1;
+
+  if (typeof a === 'number' && typeof b === 'number') {
+    return ascending ? a - b : b - a;
+  }
+
+  const strA = String(a);
+  const strB = String(b);
+  return ascending ? strA.localeCompare(strB) : strB.localeCompare(strA);
 }
 
-function getAlleleCount(v: Variant): number | null {
-  if (v.ac !== undefined) return v.ac;
-  if (v.freq?.AC !== undefined) return v.freq.AC;
-  return null;
-}
-
-function getAlleleNumber(v: Variant): number | null {
-  if (v.an !== undefined) return v.an;
-  if (v.freq?.AN !== undefined) return v.freq.AN;
-  return null;
-}
-
-export function VariantsTable({ variants }: VariantsTableProps) {
+export function VariantsTable({
+  variants,
+  highlightedVariantId,
+  onHoverVariant
+}: VariantsTableProps) {
+  const gridRef = useRef<GridRef>(null);
   const [filter, setFilter] = useState('');
-  const [sortField, setSortField] = useState<string>('position');
-  const [sortAsc, setSortAsc] = useState(true);
+  const [sortKey, setSortKey] = useState<string>('variant_id');
+  const [sortOrder, setSortOrder] = useState<'ascending' | 'descending'>('ascending');
 
+  const columns = useMemo(() => createColumns(), []);
+
+  // Filter variants
   const filteredVariants = useMemo(() => {
     if (!filter) return variants;
     const lowerFilter = filter.toLowerCase();
     return variants.filter((v) => {
       const id = getVariantId(v).toLowerCase();
       const consequence = (v.consequence || '').toLowerCase();
-      const rsid = (v.rsid || '').toLowerCase();
+      const rsid = (getRsid(v) || '').toLowerCase();
+      const hgvs = (v.hgvsc || v.hgvsp || '').toLowerCase();
       return (
         id.includes(lowerFilter) ||
         consequence.includes(lowerFilter) ||
-        rsid.includes(lowerFilter)
+        rsid.includes(lowerFilter) ||
+        hgvs.includes(lowerFilter)
       );
     });
   }, [variants, filter]);
 
+  // Sort variants
   const sortedVariants = useMemo(() => {
     const sorted = [...filteredVariants];
+    const ascending = sortOrder === 'ascending';
+
     sorted.sort((a, b) => {
-      let aVal: number | string | null;
-      let bVal: number | string | null;
-
-      switch (sortField) {
-        case 'position':
-          aVal = (a.locus?.position || a.position || 0) as number;
-          bVal = (b.locus?.position || b.position || 0) as number;
-          break;
-        case 'af':
-          aVal = getFrequency(a);
-          bVal = getFrequency(b);
-          if (aVal === null) aVal = -1;
-          if (bVal === null) bVal = -1;
-          break;
+      switch (sortKey) {
+        case 'variant_id':
+          return compareValues(getPosition(a), getPosition(b), ascending);
         case 'consequence':
-          aVal = a.consequence || '';
-          bVal = b.consequence || '';
-          break;
+          return compareValues(a.consequence, b.consequence, ascending);
+        case 'hgvs':
+          return compareValues(a.hgvsc || a.hgvsp, b.hgvsc || b.hgvsp, ascending);
+        case 'ac':
+          return compareValues(a.ac, b.ac, ascending);
+        case 'an':
+          return compareValues(a.an, b.an, ascending);
+        case 'af':
+          return compareValues(a.af, b.af, ascending);
         default:
-          aVal = 0;
-          bVal = 0;
+          return 0;
       }
-
-      if (typeof aVal === 'string' && typeof bVal === 'string') {
-        return sortAsc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-      }
-      return sortAsc
-        ? (aVal as number) - (bVal as number)
-        : (bVal as number) - (aVal as number);
     });
+
     return sorted;
-  }, [filteredVariants, sortField, sortAsc]);
+  }, [filteredVariants, sortKey, sortOrder]);
 
-  const handleSort = (field: string) => {
-    if (sortField === field) {
-      setSortAsc(!sortAsc);
+  // Handle sort request
+  const handleRequestSort = useCallback((key: string) => {
+    if (key === sortKey) {
+      setSortOrder(prev => prev === 'ascending' ? 'descending' : 'ascending');
     } else {
-      setSortField(field);
-      setSortAsc(true);
+      setSortKey(key);
+      setSortOrder('ascending');
     }
-  };
+  }, [sortKey]);
 
-  const sortIndicator = (field: string) => {
-    if (sortField !== field) return '';
-    return sortAsc ? ' ↑' : ' ↓';
-  };
+  // Handle row hover
+  const handleHoverRow = useCallback((index: number | null) => {
+    if (onHoverVariant) {
+      if (index === null) {
+        onHoverVariant(null);
+      } else {
+        const variant = sortedVariants[index];
+        onHoverVariant(variant ? getVariantId(variant) : null);
+      }
+    }
+  }, [sortedVariants, onHoverVariant]);
+
+  // Check if row should be highlighted
+  const shouldHighlightRow = useCallback((variant: Variant) => {
+    if (!highlightedVariantId) return false;
+    return getVariantId(variant) === highlightedVariantId;
+  }, [highlightedVariantId]);
 
   return (
-    <div>
-      <FilterInput
-        type="text"
-        placeholder="Filter variants by ID, rsID, or consequence..."
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
+    <TableContainer>
+      <TableHeader>
+        <SearchInput
+          type="text"
+          placeholder="Search variant table..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        <Stats>
+          {filter
+            ? `Showing ${sortedVariants.length.toLocaleString()} of ${variants.length.toLocaleString()} variants`
+            : `${variants.length.toLocaleString()} variants`
+          }
+        </Stats>
+      </TableHeader>
+
+      <Grid<Variant>
+        ref={gridRef}
+        columns={columns}
+        data={sortedVariants}
+        rowKey={getVariantId}
+        rowHeight={28}
+        numRowsRendered={20}
+        sortKey={sortKey}
+        sortOrder={sortOrder}
+        onRequestSort={handleRequestSort}
+        onHoverRow={handleHoverRow}
+        shouldHighlightRow={shouldHighlightRow}
       />
-
-      <Stats>
-        Showing {sortedVariants.length} of {variants.length} variants
-      </Stats>
-
-      <TableContainer>
-        <Table>
-          <thead>
-            <tr>
-              <Th>Variant ID</Th>
-              <Th onClick={() => handleSort('position')}>
-                Position{sortIndicator('position')}
-              </Th>
-              <Th>rsID</Th>
-              <Th onClick={() => handleSort('consequence')}>
-                Consequence{sortIndicator('consequence')}
-              </Th>
-              <Th>AC</Th>
-              <Th>AN</Th>
-              <Th onClick={() => handleSort('af')}>
-                AF{sortIndicator('af')}
-              </Th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedVariants.slice(0, 500).map((v, idx) => {
-              const id = getVariantId(v);
-              const af = getFrequency(v);
-              const ac = getAlleleCount(v);
-              const an = getAlleleNumber(v);
-              const pos = v.locus?.position || (v.position as number | undefined);
-
-              return (
-                <Tr key={id || idx}>
-                  <Td>{id}</Td>
-                  <Td>{pos ?? '-'}</Td>
-                  <Td>{v.rsid || '-'}</Td>
-                  <Td>{v.consequence || '-'}</Td>
-                  <Td>{ac ?? '-'}</Td>
-                  <Td>{an ?? '-'}</Td>
-                  <Td>{formatFrequency(af)}</Td>
-                </Tr>
-              );
-            })}
-          </tbody>
-        </Table>
-      </TableContainer>
-
-      {sortedVariants.length > 500 && (
-        <Stats>Showing first 500 variants. Use filter to narrow results.</Stats>
-      )}
-    </div>
+    </TableContainer>
   );
 }
 

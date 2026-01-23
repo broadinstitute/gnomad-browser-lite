@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import type { Gene, Variant } from '../api/types';
 import { getGeneSymbol } from '../api/types';
 import { VariantsTable } from '../components/VariantsTable';
+import { GenomeBrowser } from '../components/GenomeBrowser';
 
 const Container = styled.div`
   max-width: 1400px;
@@ -206,6 +207,13 @@ export function GenePage() {
       <div>
         <Link to={`/region/${regionString}`}>View region: {regionString}</Link>
       </div>
+
+      {variants.length > 0 && (
+        <GenomeBrowser
+          gene={gene}
+          variants={variants}
+        />
+      )}
 
       <SectionTitle>Variants ({variants.length.toLocaleString()})</SectionTitle>
 

@@ -10,13 +10,28 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fortawesome/fontawesome-free": "^6.5.1",
+    "@gnomad/region-viewer": "github:broadinstitute/gnomad-browser-toolkit#main",
+    "@gnomad/track-genes": "github:broadinstitute/gnomad-browser-toolkit#main",
+    "@gnomad/track-variants": "github:broadinstitute/gnomad-browser-toolkit#main",
+    "@gnomad/ui": "github:broadinstitute/gnomad-browser-toolkit#main",
+    "d3-scale": "^4.0.2",
+    "d3-selection": "^3.0.0",
+    "d3-shape": "^3.2.0",
+    "polished": "^4.2.2",
+    "prop-types": "^15.8.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.12.0",
+    "react-sizeme": "^3.0.2",
+    "react-window": "^1.8.10",
     "styled-components": "^6.3.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@types/d3-scale": "^4.0.8",
+    "@types/d3-selection": "^3.0.10",
+    "@types/d3-shape": "^3.1.6",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
@@ -27,6 +42,7 @@
     "globals": "^16.5.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
-    "vite": "^5.4.21"
+    "vite": "^5.4.21",
+    "vite-plugin-svgr": "^4.3.0"
   }
 }

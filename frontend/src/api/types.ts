@@ -23,8 +23,15 @@ export interface Locus {
 
 export interface Variant {
   variant_id?: string;
-  locus: Locus;
+  // Flattened locus fields from backend
+  pos: number;
+  chrom: string;
+  // Legacy nested locus (may still exist)
+  locus?: Locus;
   alleles: string[];
+  // rsIDs from backend (array)
+  rsids?: string[];
+  // Legacy single rsid
   rsid?: string;
   consequence?: string;
   hgvsc?: string;
@@ -32,17 +39,20 @@ export interface Variant {
   gene_id?: string;
   gene_symbol?: string;
   transcript_id?: string;
-  // Frequency data
+  // Frequency data (flattened from backend)
+  ac: number;
+  an: number;
+  af: number;
+  allele_freq: number;  // Alias for toolkit compatibility
+  // Legacy nested frequency
   freq?: {
     AC?: number;
     AN?: number;
     AF?: number;
     homozygote_count?: number;
   };
-  // Simplified frequency fields (flattened)
-  ac?: number;
-  an?: number;
-  af?: number;
+  // For highlighting in track/table sync
+  isHighlighted?: boolean;
   // Raw data from API
   [key: string]: unknown;
 }

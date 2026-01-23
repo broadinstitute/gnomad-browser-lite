@@ -142,7 +142,46 @@ impl Database {
         // The gnomAD browser HT uses a locus struct with contig and position fields
         // Try different schema possibilities
         let sql = r#"
-            SELECT * FROM variants
+            SELECT
+                locus.contig AS chrom,
+                locus.position AS pos,
+                to_json(alleles) AS alleles,
+                to_json(rsids) AS rsids,
+
+                -- Flatten frequency data (prioritize exome, fallback to genome)
+                -- Note: "all" is a reserved word so must be quoted
+                COALESCE(exome.freq."all".ac, genome.freq."all".ac, 0) AS ac,
+                COALESCE(exome.freq."all".an, genome.freq."all".an, 0) AS an,
+
+                -- Calculate AF (ensure DOUBLE type with 0.0)
+                CASE
+                    WHEN COALESCE(exome.freq."all".an, genome.freq."all".an, 0) > 0 THEN
+                        CAST(COALESCE(exome.freq."all".ac, genome.freq."all".ac, 0) AS DOUBLE) /
+                        CAST(COALESCE(exome.freq."all".an, genome.freq."all".an, 0) AS DOUBLE)
+                    ELSE 0.0
+                END AS af,
+
+                -- Alias for toolkit compatibility
+                CASE
+                    WHEN COALESCE(exome.freq."all".an, genome.freq."all".an, 0) > 0 THEN
+                        CAST(COALESCE(exome.freq."all".ac, genome.freq."all".ac, 0) AS DOUBLE) /
+                        CAST(COALESCE(exome.freq."all".an, genome.freq."all".an, 0) AS DOUBLE)
+                    ELSE 0.0
+                END AS allele_freq,
+
+                -- Keep the existing variant_id from the data
+                variant_id,
+
+                -- Extract consequence and HGVS from transcript_consequences (first/canonical)
+                transcript_consequences[1].major_consequence AS consequence,
+                transcript_consequences[1].hgvsc AS hgvsc,
+                transcript_consequences[1].hgvsp AS hgvsp,
+                transcript_consequences[1].gene_id AS gene_id,
+                transcript_consequences[1].gene_symbol AS gene_symbol,
+                transcript_consequences[1].transcript_id AS transcript_id,
+                transcript_consequences[1].lof AS lof
+
+            FROM variants
             WHERE locus.contig = ?
             AND locus.position >= ?
             AND locus.position <= ?
@@ -186,12 +225,13 @@ impl Database {
                         }
                     }
                     map.insert(column_name.to_string(), Value::String(val));
-                } else if let Ok(val) = row.get::<_, i64>(i) {
-                    map.insert(column_name.to_string(), Value::Number(val.into()));
                 } else if let Ok(val) = row.get::<_, f64>(i) {
+                    // Try f64 before i64 to preserve floating point values
                     if let Some(n) = serde_json::Number::from_f64(val) {
                         map.insert(column_name.to_string(), Value::Number(n));
                     }
+                } else if let Ok(val) = row.get::<_, i64>(i) {
+                    map.insert(column_name.to_string(), Value::Number(val.into()));
                 } else if let Ok(val) = row.get::<_, bool>(i) {
                     map.insert(column_name.to_string(), Value::Bool(val));
                 } else {

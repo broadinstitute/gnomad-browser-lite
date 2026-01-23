@@ -6,6 +6,7 @@ import type { VariantDetails, Population } from '../api/types';
 import { PopulationsTable } from '../components/PopulationsTable';
 import { TranscriptConsequenceList } from '../components/TranscriptConsequenceList';
 import { InSilicoPredictors } from '../components/InSilicoPredictors';
+import { VariantOccurrenceTable } from '../components/VariantOccurrenceTable';
 
 // Population display names (matching gnomAD)
 const POPULATION_NAMES: Record<string, string> = {
@@ -72,6 +73,38 @@ const RsidBadge = styled.a`
   &:hover {
     background: #bbdefb;
     text-decoration: underline;
+  }
+`;
+
+const LinkBadge = styled(Link)`
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  background: #f5f5f5;
+  color: #333;
+  text-decoration: none;
+  border: 1px solid #ddd;
+
+  &:hover {
+    background: #e0e0e0;
+  }
+`;
+
+const ExternalLinkBadge = styled.a`
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  background: #f5f5f5;
+  color: #333;
+  text-decoration: none;
+  border: 1px solid #ddd;
+
+  &:hover {
+    background: #e0e0e0;
   }
 `;
 
@@ -178,6 +211,44 @@ const Breadcrumb = styled.nav`
     &:hover {
       text-decoration: underline;
     }
+  }
+`;
+
+const TopSection = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  margin-bottom: 1rem;
+`;
+
+const OccurrenceTableWrapper = styled.div`
+  flex: 0 0 auto;
+`;
+
+const ExternalResourcesSection = styled.div`
+  flex: 1;
+  min-width: 200px;
+`;
+
+const ExternalResourcesTitle = styled.h3`
+  font-size: 1.1rem;
+  font-weight: bold;
+  margin: 1.25em 0 0.75em 0;
+`;
+
+const ResourceList = styled.ul`
+  list-style: disc;
+  padding-left: 1.5em;
+  margin: 0;
+  line-height: 1.8;
+`;
+
+const ResourceLink = styled.a`
+  color: #185da8;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
   }
 `;
 
@@ -309,31 +380,8 @@ export function VariantPage() {
       });
     });
 
-    // Add total XX/XY populations at the end
-    const totalXX = popMap.get('XX');
-    const totalXY = popMap.get('XY');
-
-    if (totalXX) {
-      result.push({
-        id: 'XX',
-        name: 'XX',
-        ac: totalXX.ac,
-        an: totalXX.an,
-        ac_hom: totalXX.homozygote_count,
-        ac_hemi: totalXX.hemizygote_count,
-      });
-    }
-
-    if (totalXY) {
-      result.push({
-        id: 'XY',
-        name: 'XY',
-        ac: totalXY.ac,
-        an: totalXY.an,
-        ac_hom: totalXY.homozygote_count,
-        ac_hemi: totalXY.hemizygote_count,
-      });
-    }
+    // Note: XX/XY totals are shown only as subpopulations under each ancestry group
+    // matching gnomAD's layout where populations expand to show Overall/XX/XY
 
     return result;
   }, [variant]);
@@ -438,61 +486,80 @@ export function VariantPage() {
           {variant.joint?.flags?.map(flag => (
             <FlagBadge key={flag}>{flag}</FlagBadge>
           ))}
-        </BadgeRow>
-
-        <ButtonRow>
           {primaryGene && (
-            <Button to={`/gene/${primaryGene.gene_id}`}>
-              Gene page ({primaryGene.gene_symbol})
-            </Button>
+            <LinkBadge to={`/gene/${primaryGene.gene_id}`}>
+              Gene page
+            </LinkBadge>
           )}
-          <ExternalButton
+          <ExternalLinkBadge
             href={`https://gnomad.broadinstitute.org/variant/${variantId}?dataset=gnomad_r4`}
             target="_blank"
             rel="noopener noreferrer"
           >
-            View in gnomAD
-          </ExternalButton>
-        </ButtonRow>
+            View in full gnomAD
+          </ExternalLinkBadge>
+        </BadgeRow>
       </Header>
 
-      {/* Frequency Summary */}
-      <SummaryTable>
-        <SummaryItem>
-          <SummaryLabel>Allele Count</SummaryLabel>
-          <SummaryValue>{formatNumber(freqData.ac)}</SummaryValue>
-        </SummaryItem>
-        <SummaryItem>
-          <SummaryLabel>Allele Number</SummaryLabel>
-          <SummaryValue>{formatNumber(freqData.an)}</SummaryValue>
-        </SummaryItem>
-        <SummaryItem>
-          <SummaryLabel>Allele Frequency</SummaryLabel>
-          <SummaryValue>{formatFrequency(freqData.ac, freqData.an)}</SummaryValue>
-        </SummaryItem>
-        <SummaryItem>
-          <SummaryLabel>Number of Homozygotes</SummaryLabel>
-          <SummaryValue>{formatNumber(freqData.homozygote_count)}</SummaryValue>
-        </SummaryItem>
-        {freqData.grpmax && (
-          <SummaryItem>
-            <SummaryLabel>Popmax ({freqData.grpmax.gen_anc?.toUpperCase()})</SummaryLabel>
-            <SummaryValue>
-              {freqData.grpmax.af !== undefined
-                ? freqData.grpmax.af.toPrecision(4)
-                : formatFrequency(freqData.grpmax.ac, freqData.grpmax.an)}
-            </SummaryValue>
-          </SummaryItem>
-        )}
-        {freqData.fafmax && freqData.fafmax.faf95_max !== undefined && (
-          <SummaryItem>
-            <SummaryLabel>
-              Filtering AF (95%) ({freqData.fafmax.faf95_max_gen_anc?.toUpperCase()})
-            </SummaryLabel>
-            <SummaryValue>{freqData.fafmax.faf95_max.toPrecision(4)}</SummaryValue>
-          </SummaryItem>
-        )}
-      </SummaryTable>
+      {/* Frequency Summary and External Resources - side by side like gnomAD */}
+      <TopSection>
+        <OccurrenceTableWrapper>
+          <VariantOccurrenceTable
+            ac={freqData.ac}
+            an={freqData.an}
+            homozygoteCount={freqData.homozygote_count}
+            faf95={freqData.fafmax?.faf95_max}
+            faf95PopMax={freqData.fafmax?.faf95_max_gen_anc}
+            filters={variant.joint?.flags}
+            chrom={chrom}
+          />
+        </OccurrenceTableWrapper>
+        <ExternalResourcesSection>
+          <ExternalResourcesTitle>External Resources</ExternalResourcesTitle>
+          <ResourceList>
+            {variant.rsids?.[0] && (
+              <li>
+                <ResourceLink
+                  href={`https://www.ncbi.nlm.nih.gov/snp/${variant.rsids[0]}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  dbSNP ({variant.rsids[0]})
+                </ResourceLink>
+              </li>
+            )}
+            <li>
+              <ResourceLink
+                href={`https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=${chrom}:${pos - 25}-${pos + 25}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                UCSC
+              </ResourceLink>
+            </li>
+            {variant.caid && (
+              <li>
+                <ResourceLink
+                  href={`https://reg.clinicalgenome.org/redmine/projects/registry/genboree_registry/by_caid?caid=${variant.caid}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  ClinGen Allele Registry ({variant.caid})
+                </ResourceLink>
+              </li>
+            )}
+            <li>
+              <ResourceLink
+                href={`https://gnomad.broadinstitute.org/variant/${variantId}?dataset=gnomad_r4`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                gnomAD
+              </ResourceLink>
+            </li>
+          </ResourceList>
+        </ExternalResourcesSection>
+      </TopSection>
 
       {/* Population Frequencies */}
       {populations.length > 0 && (
@@ -556,49 +623,6 @@ export function VariantPage() {
         </>
       )}
 
-      {/* External Resources */}
-      <SectionTitle>External Resources</SectionTitle>
-      <ExternalResources>
-        {variant.rsids?.[0] && (
-          <ExternalButton
-            href={`https://www.ncbi.nlm.nih.gov/snp/${variant.rsids[0]}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            dbSNP
-          </ExternalButton>
-        )}
-        {variant.caid && (
-          <ExternalButton
-            href={`https://reg.clinicalgenome.org/redmine/projects/registry/genboree_registry/by_caid?caid=${variant.caid}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            ClinGen Allele Registry
-          </ExternalButton>
-        )}
-        <ExternalButton
-          href={`https://ensembl.org/Homo_sapiens/Location/View?r=${chrom.replace('chr', '')}:${pos - 25}-${pos + 25}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Ensembl
-        </ExternalButton>
-        <ExternalButton
-          href={`https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=${chrom}:${pos - 25}-${pos + 25}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          UCSC Browser
-        </ExternalButton>
-        <ExternalButton
-          href={`https://gnomad.broadinstitute.org/variant/${variantId}?dataset=gnomad_r4`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          gnomAD
-        </ExternalButton>
-      </ExternalResources>
     </Container>
   );
 }

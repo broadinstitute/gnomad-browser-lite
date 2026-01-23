@@ -171,7 +171,7 @@ type PopulationsTableState = {
 export class PopulationsTable extends Component<PopulationsTableProps, PopulationsTableState> {
   static defaultProps = {
     columnLabels: {},
-    showHemizygotes: true,
+    showHemizygotes: false,
     showHomozygotes: true,
     initiallyExpandRows: false,
   };

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { scaleLinear, type ScaleLinear } from 'd3-scale';
 import type { Gene, Variant, Exon } from '../api/types';
@@ -61,6 +62,23 @@ const ToggleButton = styled.button<{ $active: boolean }>`
   }
 `;
 
+const LinkButton = styled(Link)`
+  padding: 0.375rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  color: #666;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-decoration: none;
+
+  &:hover {
+    background: #f5f5f5;
+    border-color: #ccc;
+  }
+`;
+
 const TrackContainer = styled.div`
   display: flex;
   flex-direction: column;
@@ -110,6 +128,7 @@ interface GenomeBrowserProps {
   showIntrons?: boolean;
   onShowIntronsChange?: (showIntrons: boolean) => void;
   onHoverVariant?: (variant: Variant | null) => void;
+  regionUrl?: string;
 }
 
 // Determine variant color based on consequence
@@ -549,7 +568,8 @@ export function GenomeBrowser({
   exons,
   showIntrons: showIntronsProp = false,
   onShowIntronsChange,
-  onHoverVariant
+  onHoverVariant,
+  regionUrl
 }: GenomeBrowserProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
@@ -646,6 +666,11 @@ export function GenomeBrowser({
           </HoverInfo>
         </HeaderLeft>
         <HeaderRight>
+          {regionUrl && (
+            <LinkButton to={regionUrl}>
+              View region
+            </LinkButton>
+          )}
           {exons && exons.length > 0 && (
             <ToggleButton
               $active={showIntrons}

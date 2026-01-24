@@ -9,11 +9,13 @@ import {
   regionViewerScale,
   linearGenomicScale,
 } from '../utils/coordinates';
-
-// Helper to get variant position
-function getVariantPosition(v: Variant): number {
-  return v.pos || v.locus?.position || 0;
-}
+import {
+  getVariantPosition,
+  getVariantColor,
+  isInExonRegion,
+  getVariantRadius,
+} from './variantUtils';
+import { ProteinPaintTrack } from './protein-paint';
 
 const BrowserContainer = styled.div`
   margin: 1rem 0;
@@ -152,36 +154,6 @@ interface GenomeBrowserProps {
   onRegionChange?: (region: { start: number; stop: number }) => void;
 }
 
-// Determine variant color based on consequence
-function getVariantColor(variant: Variant): string {
-  const consequence = variant.consequence?.toLowerCase() || '';
-
-  if (consequence.includes('frameshift') ||
-      consequence.includes('stop_gained') ||
-      consequence.includes('splice_acceptor') ||
-      consequence.includes('splice_donor') ||
-      consequence.includes('start_lost')) {
-    return '#dd3333'; // Loss of function - red
-  }
-  if (consequence.includes('missense')) {
-    return '#f59e0b'; // Missense - orange
-  }
-  if (consequence.includes('synonymous')) {
-    return '#10b981'; // Synonymous - green
-  }
-  if (consequence.includes('intron') ||
-      consequence.includes('upstream') ||
-      consequence.includes('downstream')) {
-    return '#a0aec0'; // Non-coding - light gray
-  }
-  return '#757575'; // Default - gray
-}
-
-
-// Check if a position falls within any exon region
-function isInExonRegion(pos: number, exons: Exon[]): boolean {
-  return exons.some(exon => pos >= exon.start && pos <= exon.stop);
-}
 
 // Exon styling based on feature type (matching gnomAD)
 const EXON_STYLES = {
@@ -286,25 +258,6 @@ function GeneTrack({ gene, exons, scale, width, showIntrons }: GeneTrackProps) {
       )}
     </svg>
   );
-}
-
-// Calculate radius based on log allele frequency
-// More common variants (higher AF) get larger circles
-function getVariantRadius(af: number | undefined): number {
-  const minRadius = 2;
-  const maxRadius = 8;
-
-  if (af === undefined || af === null || af === 0) {
-    return minRadius;
-  }
-
-  // Log10 scale: AF ranges from ~1e-6 to 1
-  // Map log10(AF) from [-6, 0] to [minRadius, maxRadius]
-  const logAf = Math.log10(Math.max(af, 1e-6));
-  const normalizedLog = (logAf + 6) / 6; // Maps [-6, 0] to [0, 1]
-  const clampedNorm = Math.max(0, Math.min(1, normalizedLog));
-
-  return minRadius + clampedNorm * (maxRadius - minRadius);
 }
 
 // Variant Track Component using Canvas for performance
@@ -512,6 +465,9 @@ export function GenomeBrowser({
   const showIntrons = onShowIntronsChange ? showIntronsProp : showIntronsLocal;
   const setShowIntrons = onShowIntronsChange || setShowIntronsLocal;
 
+  // View mode toggle (scatter vs lollipop)
+  const [viewMode, setViewMode] = useState<'scatter' | 'lollipop'>('scatter');
+
   // Determine the effective view region (zoom region or full gene)
   const viewRegion = useMemo(() => {
     if (region) {
@@ -676,6 +632,13 @@ export function GenomeBrowser({
           </HoverInfo>
         </HeaderLeft>
         <HeaderRight>
+          <ToggleButton
+            $active={viewMode === 'lollipop'}
+            onClick={() => setViewMode(viewMode === 'scatter' ? 'lollipop' : 'scatter')}
+            title={viewMode === 'scatter' ? 'Switch to lollipop view' : 'Switch to scatter view'}
+          >
+            {viewMode === 'scatter' ? 'Lollipop' : 'Scatter'}
+          </ToggleButton>
           {regionUrl && (
             <LinkButton to={regionUrl}>
               View region
@@ -711,34 +674,69 @@ export function GenomeBrowser({
           />
         )}
 
-        {/* Gene Track */}
-        <TrackRow>
-          <TrackLabel>Gene</TrackLabel>
-          <TrackContent>
-            <GeneTrack
-              gene={gene}
-              exons={exons}
-              scale={scale}
-              width={containerWidth}
-              showIntrons={showIntrons}
-            />
-          </TrackContent>
-        </TrackRow>
+        {/* Combined Lollipop + Gene Track (when in lollipop mode) */}
+        {viewMode === 'lollipop' && (
+          <TrackRow>
+            <TrackLabel>Variants</TrackLabel>
+            <TrackContent>
+              <div style={{ position: 'relative' }}>
+                {/* Lollipops above */}
+                <ProteinPaintTrack
+                  variants={variants}
+                  scale={scale}
+                  width={containerWidth}
+                  height={300}
+                  exons={exons}
+                  showIntrons={showIntrons}
+                  onHover={handleVariantHover}
+                />
+                {/* Gene track at bottom, overlapping the baseline */}
+                <div style={{ marginTop: -25 }}>
+                  <GeneTrack
+                    gene={gene}
+                    exons={exons}
+                    scale={scale}
+                    width={containerWidth}
+                    showIntrons={showIntrons}
+                  />
+                </div>
+              </div>
+            </TrackContent>
+          </TrackRow>
+        )}
 
-        {/* Variant Track */}
-        <TrackRow>
-          <TrackLabel>Variants</TrackLabel>
-          <TrackContent>
-            <VariantTrack
-              variants={variants}
-              scale={scale}
-              width={containerWidth}
-              exons={exons}
-              showIntrons={showIntrons}
-              onHover={handleVariantHover}
-            />
-          </TrackContent>
-        </TrackRow>
+        {/* Separate Gene Track (scatter mode only) */}
+        {viewMode === 'scatter' && (
+          <TrackRow>
+            <TrackLabel>Gene</TrackLabel>
+            <TrackContent>
+              <GeneTrack
+                gene={gene}
+                exons={exons}
+                scale={scale}
+                width={containerWidth}
+                showIntrons={showIntrons}
+              />
+            </TrackContent>
+          </TrackRow>
+        )}
+
+        {/* Variant Track (scatter mode only) */}
+        {viewMode === 'scatter' && (
+          <TrackRow>
+            <TrackLabel>Variants</TrackLabel>
+            <TrackContent>
+              <VariantTrack
+                variants={variants}
+                scale={scale}
+                width={containerWidth}
+                exons={exons}
+                showIntrons={showIntrons}
+                onHover={handleVariantHover}
+              />
+            </TrackContent>
+          </TrackRow>
+        )}
 
         {/* Position Axis */}
         <TrackRow>

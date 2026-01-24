@@ -34,8 +34,11 @@ async fn main() -> anyhow::Result<()> {
     // Initialize database
     let db = Database::new()?;
 
-    // Register Parquet views
-    let data_dir = PathBuf::from("../data");
+    // Register Parquet views - use DATA_DIR env var or default to ../data
+    let data_dir = std::env::var("DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("../data"));
+    tracing::info!("Using data directory: {:?}", data_dir);
     db.register_views(&data_dir)?;
 
     // Print schema info for debugging
@@ -73,8 +76,9 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    // Start server
-    let addr = "0.0.0.0:3000";
+    // Start server - use PORT env var or default to 3000
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Starting server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

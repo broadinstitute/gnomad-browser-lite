@@ -18,4 +18,9 @@ export default defineConfig({
       include: "**/*.svg",
     }),
   ],
+  server: {
+    // Use VITE_PORT env var or default to 5173
+    port: parseInt(process.env.VITE_PORT || '5173'),
+    strictPort: true,
+  },
 })

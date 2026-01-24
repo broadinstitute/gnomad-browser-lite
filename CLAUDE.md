@@ -36,9 +36,10 @@ pnpm start  # Restart both
 ## Setup
 
 ```bash
-./scripts/setup.sh                    # Main project
-./scripts/setup.sh --worktree-name X  # Existing worktree
-./scripts/setup.sh --skip-data        # Skip data export
+./scripts/setup.sh                            # Main project
+./scripts/setup.sh --worktree-name X          # Existing worktree
+./scripts/setup.sh --create-worktree ../X --from-main  # Fast: copy data/build from main
+./scripts/setup.sh --skip-data                # Skip data export
 ```
 
 ## Viewing in Browser

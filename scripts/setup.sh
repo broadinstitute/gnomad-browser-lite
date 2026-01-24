@@ -12,6 +12,7 @@ WORKTREE_BRANCH=""
 INTERVALS_FILE="${INTERVALS_FILE:-data/test_intervals.json}"
 SKIP_DATA="${SKIP_DATA:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
+FROM_MAIN="${FROM_MAIN:-false}"
 
 usage() {
     cat <<EOF
@@ -23,6 +24,7 @@ Options:
     --worktree-name NAME    Name for unique port generation
     --create-worktree PATH  Create a new git worktree at PATH
     --branch BRANCH         Branch for new worktree (default: new branch from HEAD)
+    --from-main             Copy data and backend build from main (fast worktree setup)
     --intervals FILE        Intervals file for data export (default: data/test_intervals.json)
     --skip-data             Skip parquet data export
     --skip-build            Skip backend/frontend builds
@@ -35,6 +37,7 @@ Examples:
     ./scripts/setup.sh                                      # Main project setup
     ./scripts/setup.sh --worktree-name my-wt                # Setup with unique ports
     ./scripts/setup.sh --create-worktree ../my-feature      # Create worktree and setup
+    ./scripts/setup.sh --create-worktree ../my-feature --from-main  # Fast: copy from main
     ./scripts/setup.sh --create-worktree ~/wt/fix --branch fix-bug
 EOF
 }
@@ -48,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --intervals) INTERVALS_FILE="$2"; shift 2 ;;
         --skip-data) SKIP_DATA=true; shift ;;
         --skip-build) SKIP_BUILD=true; shift ;;
+        --from-main) FROM_MAIN=true; shift ;;
         -h|--help) usage; exit 0 ;;
         --) shift ;;  # Ignore -- separator from pnpm
         *) echo "Unknown option: $1"; usage; exit 1 ;;
@@ -85,6 +89,33 @@ else
 fi
 echo "  Project root: $PROJECT_ROOT"
 echo ""
+
+# Copy from main if requested (fast worktree setup)
+if [[ "$FROM_MAIN" == "true" && "$PROJECT_ROOT" != "$MAIN_PROJECT" ]]; then
+    echo "Copying data from main..."
+    mkdir -p data
+    cp "$MAIN_PROJECT"/data/*.parquet data/ 2>/dev/null || echo "  No parquet files in main yet"
+
+    echo "Copying backend build from main..."
+    if [[ -d "$MAIN_PROJECT/backend/target/release" ]]; then
+        mkdir -p backend/target
+        cp -R "$MAIN_PROJECT/backend/target/release" backend/target/
+        echo "  Copied release build"
+    else
+        echo "  No release build in main, will build fresh"
+        FROM_MAIN=false  # Fall back to normal build
+    fi
+
+    # Skip data export and backend build since we copied them
+    SKIP_DATA=true
+    SKIP_BUILD=true
+
+    # Still need frontend deps
+    echo ""
+    echo "Installing dependencies..."
+    pnpm install
+    (cd frontend && pnpm install)
+fi
 
 # Export parquet data
 if [[ "$SKIP_DATA" != "true" ]]; then

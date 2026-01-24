@@ -24,7 +24,7 @@ Options:
     --worktree-name NAME    Name for unique port generation
     --create-worktree PATH  Create a new git worktree at PATH
     --branch BRANCH         Branch for new worktree (default: new branch from HEAD)
-    --from-main             Copy data and backend build from main (fast worktree setup)
+    --from-main             Copy parquet data from main (skip slow export)
     --intervals FILE        Intervals file for data export (default: data/test_intervals.json)
     --skip-data             Skip parquet data export
     --skip-build            Skip backend/frontend builds
@@ -90,31 +90,16 @@ fi
 echo "  Project root: $PROJECT_ROOT"
 echo ""
 
-# Copy from main if requested (fast worktree setup)
+# Copy data from main if requested (fast worktree setup)
 if [[ "$FROM_MAIN" == "true" && "$PROJECT_ROOT" != "$MAIN_PROJECT" ]]; then
     echo "Copying data from main..."
     mkdir -p data
-    cp "$MAIN_PROJECT"/data/*.parquet data/ 2>/dev/null || echo "  No parquet files in main yet"
-
-    echo "Copying backend build from main..."
-    if [[ -d "$MAIN_PROJECT/backend/target/release" ]]; then
-        mkdir -p backend/target
-        cp -R "$MAIN_PROJECT/backend/target/release" backend/target/
-        echo "  Copied release build"
+    if cp "$MAIN_PROJECT"/data/*.parquet data/ 2>/dev/null; then
+        echo "  Copied parquet files"
+        SKIP_DATA=true
     else
-        echo "  No release build in main, will build fresh"
-        FROM_MAIN=false  # Fall back to normal build
+        echo "  No parquet files in main yet, will export"
     fi
-
-    # Skip data export and backend build since we copied them
-    SKIP_DATA=true
-    SKIP_BUILD=true
-
-    # Still need frontend deps
-    echo ""
-    echo "Installing dependencies..."
-    pnpm install
-    (cd frontend && pnpm install)
 fi
 
 # Export parquet data

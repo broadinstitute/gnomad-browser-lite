@@ -3,27 +3,35 @@
 # sccache: Caches compilation artifacts globally, enabling sharing between worktrees
 # without the file locking issues of a shared target directory.
 #
-# Note: mold linker is Linux-only (macOS Mach-O support was removed).
-# On macOS ARM64, Apple's default linker is quite fast.
+# DuckDB: By default uses system library. On macOS with Homebrew, paths are set below.
+# On Linux, system DuckDB (/usr/lib) should be found automatically.
+# For bundled builds: cargo build --features bundled
 
 [build]
 rustc-wrapper = "sccache"
 
-# macOS ARM64: link against Homebrew DuckDB
+# macOS ARM64: Homebrew DuckDB paths
 [target.aarch64-apple-darwin]
 rustflags = ["-L", "/opt/homebrew/opt/duckdb/lib"]
 
-[env]
-# Tell libduckdb-sys where to find DuckDB headers
+[target.aarch64-apple-darwin.env]
 DUCKDB_LIB_DIR = "/opt/homebrew/opt/duckdb/lib"
 DUCKDB_INCLUDE_DIR = "/opt/homebrew/opt/duckdb/include"
 
-# Linux x86_64: use mold for faster linking
+# macOS x86_64: Homebrew DuckDB paths (Intel Macs)
+[target.x86_64-apple-darwin]
+rustflags = ["-L", "/usr/local/opt/duckdb/lib"]
+
+[target.x86_64-apple-darwin.env]
+DUCKDB_LIB_DIR = "/usr/local/opt/duckdb/lib"
+DUCKDB_INCLUDE_DIR = "/usr/local/opt/duckdb/include"
+
+# Linux x86_64: use mold for faster linking (DuckDB from system paths)
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
-# Linux ARM64: use mold for faster linking
+# Linux ARM64: use mold for faster linking (DuckDB from system paths)
 [target.aarch64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]

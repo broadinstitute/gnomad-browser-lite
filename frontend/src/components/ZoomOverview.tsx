@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useMemo, useEffect } from 'react';
 import styled from 'styled-components';
 import type { Gene, Exon } from '../api/types';
-import { mergeOverlappingRegions, linearGenomicScale, type ScalePosition } from '../utils/coordinates';
+import { mergeOverlappingRegions, linearGenomicScale, regionViewerScale, type ScalePosition } from '../utils/coordinates';
 
 const OverviewContainer = styled.div`
   position: relative;
@@ -133,16 +133,59 @@ export function ZoomOverview({
     return mergeOverlappingRegions(filtered);
   }, [exons]);
 
-  // Use linear scale for the overview - shows full genomic context
-  // This allows the selection box to properly position for any zoom region
+  // Use collapsed scale for the overview - shows only exonic regions
   const scale = useMemo((): ScalePosition => {
-    return linearGenomicScale(gene.start, gene.stop, [0, containerWidth], 0.01);
+    if (cdsExons.length === 0) {
+      // Fallback to linear scale if no exons
+      return linearGenomicScale(gene.start, gene.stop, [0, containerWidth], 0.01);
+    }
+    // Use regionViewerScale to show collapsed exons (no introns)
+    return regionViewerScale(cdsExons, [0, containerWidth], 3);
+  }, [cdsExons, gene.start, gene.stop, containerWidth]);
+
+  // For dragging, we need a linear scale to convert pixel deltas to genomic deltas
+  const linearScale = useMemo((): ScalePosition => {
+    return linearGenomicScale(gene.start, gene.stop, [0, containerWidth], 0);
   }, [gene.start, gene.stop, containerWidth]);
 
-  // Calculate selection position
-  const selectionLeft = scale(zoomRegion.start);
-  const selectionRight = scale(zoomRegion.stop);
-  const selectionWidth = selectionRight - selectionLeft;
+  // Calculate selection position on the collapsed scale
+  // Find the exons that overlap with the zoom region and highlight that span
+  const selectionBounds = useMemo(() => {
+    if (cdsExons.length === 0) {
+      // No exons - use direct scale mapping
+      const left = scale(zoomRegion.start);
+      const right = scale(zoomRegion.stop);
+      return { left, width: Math.max(right - left, 10) };
+    }
+
+    // Find exons that overlap with the zoom region
+    const overlappingExons = cdsExons.filter(
+      exon => exon.stop >= zoomRegion.start && exon.start <= zoomRegion.stop
+    );
+
+    if (overlappingExons.length === 0) {
+      // Zoom region is entirely in introns - find nearest exon position
+      const midpoint = (zoomRegion.start + zoomRegion.stop) / 2;
+      const pos = scale(midpoint);
+      return { left: pos - 5, width: 10 };
+    }
+
+    // Get the pixel bounds for the overlapping exon range
+    // Clip the bounds to the actual zoom region
+    const firstExon = overlappingExons[0];
+    const lastExon = overlappingExons[overlappingExons.length - 1];
+
+    const clippedStart = Math.max(firstExon.start, zoomRegion.start);
+    const clippedStop = Math.min(lastExon.stop, zoomRegion.stop);
+
+    const left = scale(clippedStart);
+    const right = scale(clippedStop);
+
+    return { left, width: Math.max(right - left, 10) };
+  }, [cdsExons, zoomRegion, scale]);
+
+  const selectionLeft = selectionBounds.left;
+  const selectionWidth = selectionBounds.width;
 
   // Drag handlers
   const handleMouseDown = useCallback((
@@ -162,7 +205,9 @@ export function ZoomOverview({
     if (!dragState) return;
 
     const deltaX = e.clientX - dragState.startX;
-    const deltaGenomic = scale.invert(deltaX) - scale.invert(0);
+    // Use linear scale for converting pixel deltas to genomic deltas
+    // This ensures dragging moves smoothly through genomic space
+    const deltaGenomic = linearScale.invert(deltaX) - linearScale.invert(0);
 
     let newStart = dragState.startRegion.start;
     let newStop = dragState.startRegion.stop;
@@ -193,7 +238,7 @@ export function ZoomOverview({
       start: Math.round(newStart),
       stop: Math.round(newStop),
     });
-  }, [dragState, scale, gene.start, gene.stop, onRegionChange]);
+  }, [dragState, linearScale, gene.start, gene.stop, onRegionChange]);
 
   const handleMouseUp = useCallback(() => {
     setDragState(null);
@@ -217,6 +262,7 @@ export function ZoomOverview({
 
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
+    // Use collapsed scale's invert - clicking on an exon centers on that genomic position
     const clickGenomic = scale.invert(clickX);
 
     const regionSize = zoomRegion.stop - zoomRegion.start;

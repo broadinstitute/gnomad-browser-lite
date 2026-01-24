@@ -1,6 +1,6 @@
 # gnomAD Browser Lite
 
-A lightweight, standalone variant browser powered by DuckDB and Parquet files. This project provides a simplified version of the gnomAD browser that can run locally without requiring a live ElasticSearch cluster or GraphQL API.
+A lightweight, standalone variant browser that uses DuckDB and Parquet files for storage. This project provides a simplified version of the gnomAD browser that can run locally without requiring a live ElasticSearch cluster or GraphQL API.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ A lightweight, standalone variant browser powered by DuckDB and Parquet files. T
 
 - Rust 1.70+
 - Node.js 20.19+ (or 22.12+)
-- `hail-decoder` CLI (for exporting data to Parquet)
+- [`hail-decoder`](https://github.com/broadinstitute/hail-rust-decoder) CLI (for exporting data to Parquet)
 
 ## Data Setup
 

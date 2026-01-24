@@ -1,8 +1,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
-import { scaleLinear, type ScaleLinear } from 'd3-scale';
 import type { Gene, Variant, Exon } from '../api/types';
+import {
+  type Region,
+  type ScalePosition,
+  mergeOverlappingRegions,
+  regionViewerScale,
+  linearGenomicScale,
+} from '../utils/coordinates';
 
 // Helper to get variant position
 function getVariantPosition(v: Variant): number {
@@ -106,6 +112,17 @@ const TrackContent = styled.div`
   position: relative;
 `;
 
+const SelectionOverlay = styled.div`
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: rgba(66, 133, 244, 0.2);
+  border: 1px solid rgba(66, 133, 244, 0.6);
+  pointer-events: none;
+  z-index: 10;
+`;
+
+
 const HoverInfo = styled.div`
   padding: 4px 8px;
   background: #f5f5f5;
@@ -129,6 +146,10 @@ interface GenomeBrowserProps {
   onShowIntronsChange?: (showIntrons: boolean) => void;
   onHoverVariant?: (variant: Variant | null) => void;
   regionUrl?: string;
+  /** Optional zoom region - if provided, scale will be limited to this region */
+  region?: { start: number; stop: number };
+  /** Callback when user selects a new region via drag */
+  onRegionChange?: (region: { start: number; stop: number }) => void;
 }
 
 // Determine variant color based on consequence
@@ -156,100 +177,6 @@ function getVariantColor(variant: Variant): string {
   return '#757575'; // Default - gray
 }
 
-// Region type for collapsed scale
-interface Region {
-  start: number;
-  stop: number;
-}
-
-// Create a collapsed scale that maps only exon regions to pixel coordinates
-// Returns a function that maps genomic position to pixel position
-function createCollapsedScale(
-  regions: Region[],
-  width: number,
-  padding: number = 10
-): (pos: number) => number {
-  if (regions.length === 0) {
-    return () => 0;
-  }
-
-  // Sort regions by start position
-  const sortedRegions = [...regions].sort((a, b) => a.start - b.start);
-
-  // Merge overlapping regions
-  const mergedRegions: Region[] = [];
-  for (const region of sortedRegions) {
-    if (mergedRegions.length === 0) {
-      mergedRegions.push({ ...region });
-    } else {
-      const last = mergedRegions[mergedRegions.length - 1];
-      if (region.start <= last.stop + 1) {
-        // Merge overlapping or adjacent regions
-        last.stop = Math.max(last.stop, region.stop);
-      } else {
-        mergedRegions.push({ ...region });
-      }
-    }
-  }
-
-  // Calculate total length of all regions
-  const totalLength = mergedRegions.reduce((sum, r) => sum + (r.stop - r.start + 1), 0);
-
-  // Calculate available width (excluding padding between regions)
-  const gapWidth = 2; // Small gap between regions
-  const numGaps = mergedRegions.length - 1;
-  const availableWidth = width - (numGaps * gapWidth) - (padding * 2);
-
-  // Calculate cumulative offsets for each region
-  const regionOffsets: { start: number; stop: number; pixelStart: number; pixelEnd: number }[] = [];
-  let currentPixel = padding;
-
-  for (const region of mergedRegions) {
-    const regionLength = region.stop - region.start + 1;
-    const regionWidth = (regionLength / totalLength) * availableWidth;
-
-    regionOffsets.push({
-      start: region.start,
-      stop: region.stop,
-      pixelStart: currentPixel,
-      pixelEnd: currentPixel + regionWidth,
-    });
-
-    currentPixel += regionWidth + gapWidth;
-  }
-
-  // Return scale function
-  return (pos: number): number => {
-    // Find which region contains this position
-    for (const region of regionOffsets) {
-      if (pos >= region.start && pos <= region.stop) {
-        // Linear interpolation within the region
-        const relativePos = (pos - region.start) / (region.stop - region.start + 1);
-        return region.pixelStart + relativePos * (region.pixelEnd - region.pixelStart);
-      }
-    }
-
-    // Position is outside all regions (in an intron)
-    // Find the nearest region and return its edge
-    for (let i = 0; i < regionOffsets.length; i++) {
-      const region = regionOffsets[i];
-      if (pos < region.start) {
-        // Before this region - return start of this region
-        return region.pixelStart;
-      }
-      if (i < regionOffsets.length - 1) {
-        const nextRegion = regionOffsets[i + 1];
-        if (pos > region.stop && pos < nextRegion.start) {
-          // Between this region and next - return end of this region
-          return region.pixelEnd;
-        }
-      }
-    }
-
-    // After all regions
-    return regionOffsets[regionOffsets.length - 1]?.pixelEnd ?? width - padding;
-  };
-}
 
 // Check if a position falls within any exon region
 function isInExonRegion(pos: number, exons: Exon[]): boolean {
@@ -272,14 +199,12 @@ const EXON_STYLES = {
   },
 };
 
-// Scale function type (can be d3 scale or collapsed scale)
-type ScaleFunction = (pos: number) => number;
 
 // Gene Track Component
 interface GeneTrackProps {
   gene: Gene;
   exons?: Exon[];
-  scale: ScaleFunction;
+  scale: ScalePosition;
   width: number;
   showIntrons: boolean;
 }
@@ -385,7 +310,7 @@ function getVariantRadius(af: number | undefined): number {
 // Variant Track Component using Canvas for performance
 interface VariantTrackProps {
   variants: Variant[];
-  scale: ScaleFunction;
+  scale: ScalePosition;
   width: number;
   height?: number;
   exons?: Exon[];
@@ -500,7 +425,7 @@ function VariantTrack({ variants, scale, width, height = 80, exons, showIntrons,
 
 // Position Axis Component
 interface PositionAxisProps {
-  scale: ScaleFunction;
+  scale: ScalePosition;
   width: number;
   exons?: Exon[];
   showIntrons: boolean;
@@ -569,16 +494,31 @@ export function GenomeBrowser({
   showIntrons: showIntronsProp = false,
   onShowIntronsChange,
   onHoverVariant,
-  regionUrl
+  regionUrl,
+  region,
+  onRegionChange,
 }: GenomeBrowserProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
   const [hoveredVariant, setHoveredVariant] = useState<Variant | null>(null);
 
+  // Drag selection state
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<number | null>(null);
+  const [dragEnd, setDragEnd] = useState<number | null>(null);
+
   // Use controlled or uncontrolled mode
   const [showIntronsLocal, setShowIntronsLocal] = useState(false);
   const showIntrons = onShowIntronsChange ? showIntronsProp : showIntronsLocal;
   const setShowIntrons = onShowIntronsChange || setShowIntronsLocal;
+
+  // Determine the effective view region (zoom region or full gene)
+  const viewRegion = useMemo(() => {
+    if (region) {
+      return region;
+    }
+    return { start: gene.start, stop: gene.stop };
+  }, [region, gene.start, gene.stop]);
 
   // Measure container width
   useEffect(() => {
@@ -594,27 +534,31 @@ export function GenomeBrowser({
     return () => resizeObserver.disconnect();
   }, []);
 
-  // Create full genomic scale
+  // Create full genomic scale (linear, showing introns)
   const fullScale = useMemo(() => {
-    const padding = 0.02; // 2% padding on each side
-    const range = gene.stop - gene.start;
-    const paddedStart = gene.start - range * padding;
-    const paddedEnd = gene.stop + range * padding;
+    return linearGenomicScale(viewRegion.start, viewRegion.stop, [0, containerWidth]);
+  }, [viewRegion.start, viewRegion.stop, containerWidth]);
 
-    const linearScale = scaleLinear()
-      .domain([paddedStart, paddedEnd])
-      .range([0, containerWidth]);
-
-    return (pos: number) => linearScale(pos);
-  }, [gene.start, gene.stop, containerWidth]);
-
-  // Create collapsed scale (only exon regions)
+  // Create collapsed scale (only exon regions, hiding introns)
   const collapsedScale = useMemo(() => {
     if (!exons || exons.length === 0) {
       return fullScale;
     }
-    return createCollapsedScale(exons, containerWidth);
-  }, [exons, containerWidth, fullScale]);
+    // Filter exons to those within the view region
+    const visibleExons = exons.filter(
+      e => e.stop >= viewRegion.start && e.start <= viewRegion.stop
+    );
+    if (visibleExons.length === 0) {
+      return fullScale;
+    }
+    // Clip exons to view region boundaries
+    const clippedExons: Region[] = visibleExons.map(e => ({
+      start: Math.max(e.start, viewRegion.start),
+      stop: Math.min(e.stop, viewRegion.stop),
+    }));
+    const mergedExons = mergeOverlappingRegions(clippedExons);
+    return regionViewerScale(mergedExons, [0, containerWidth]);
+  }, [exons, viewRegion.start, viewRegion.stop, containerWidth, fullScale]);
 
   // Use appropriate scale based on toggle
   const scale = showIntrons ? fullScale : collapsedScale;
@@ -632,6 +576,72 @@ export function GenomeBrowser({
     setHoveredVariant(variant);
     onHoverVariant?.(variant);
   }, [onHoverVariant]);
+
+  // Drag-to-zoom handlers
+  const trackContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!onRegionChange || !trackContainerRef.current) return;
+
+    const rect = trackContainerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left - 80; // Subtract label width
+
+    setIsDragging(true);
+    setDragStart(x);
+    setDragEnd(x);
+  }, [onRegionChange]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDragging || !trackContainerRef.current) return;
+
+    const rect = trackContainerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left - 80; // Subtract label width
+    setDragEnd(x);
+  }, [isDragging]);
+
+  const handleMouseUp = useCallback(() => {
+    if (!isDragging || dragStart === null || dragEnd === null || !onRegionChange) {
+      setIsDragging(false);
+      setDragStart(null);
+      setDragEnd(null);
+      return;
+    }
+
+    // Convert pixel positions to genomic coordinates
+    const startX = Math.min(dragStart, dragEnd);
+    const endX = Math.max(dragStart, dragEnd);
+
+    // Only trigger zoom if selection is at least 5 pixels wide
+    if (endX - startX >= 5) {
+      const genomicStart = Math.round(scale.invert(startX));
+      const genomicEnd = Math.round(scale.invert(endX));
+
+      // Ensure we have valid coordinates
+      if (genomicStart < genomicEnd) {
+        onRegionChange({ start: genomicStart, stop: genomicEnd });
+      }
+    }
+
+    setIsDragging(false);
+    setDragStart(null);
+    setDragEnd(null);
+  }, [isDragging, dragStart, dragEnd, scale, onRegionChange]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (isDragging) {
+      setIsDragging(false);
+      setDragStart(null);
+      setDragEnd(null);
+    }
+  }, [isDragging]);
+
+  // Calculate selection overlay position
+  const selectionLeft = dragStart !== null && dragEnd !== null
+    ? Math.min(dragStart, dragEnd)
+    : 0;
+  const selectionWidth = dragStart !== null && dragEnd !== null
+    ? Math.abs(dragEnd - dragStart)
+    : 0;
 
   return (
     <BrowserContainer ref={containerRef}>
@@ -683,7 +693,24 @@ export function GenomeBrowser({
         </HeaderRight>
       </BrowserHeader>
 
-      <TrackContainer>
+      <TrackContainer
+        ref={trackContainerRef}
+        onMouseDown={onRegionChange ? handleMouseDown : undefined}
+        onMouseMove={onRegionChange ? handleMouseMove : undefined}
+        onMouseUp={onRegionChange ? handleMouseUp : undefined}
+        onMouseLeave={onRegionChange ? handleMouseLeave : undefined}
+        style={{ position: 'relative', cursor: onRegionChange ? 'crosshair' : 'default' }}
+      >
+        {/* Selection overlay during drag */}
+        {isDragging && selectionWidth > 0 && (
+          <SelectionOverlay
+            style={{
+              left: `${80 + selectionLeft}px`, // Add label width offset
+              width: `${selectionWidth}px`,
+            }}
+          />
+        )}
+
         {/* Gene Track */}
         <TrackRow>
           <TrackLabel>Gene</TrackLabel>

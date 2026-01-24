@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import styled from 'styled-components';
 import { api } from '../api/client';
 import type { Gene, Variant, Exon } from '../api/types';
@@ -101,6 +101,38 @@ const Breadcrumb = styled.nav`
   }
 `;
 
+const ZoomControlsWrapper = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-size: 14px;
+`;
+
+const ZoomInfo = styled.span`
+  color: #333;
+`;
+
+const ZoomButton = styled.button`
+  padding: 0.375rem 0.75rem;
+  border: 1px solid #1976d2;
+  border-radius: 4px;
+  background: #1976d2;
+  color: white;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: #1565c0;
+    border-color: #1565c0;
+  }
+`;
+
 // Helper to check if a position falls within any exon region
 function isInExonRegion(pos: number, exons: Exon[]): boolean {
   return exons.some(exon => pos >= exon.start && pos <= exon.stop);
@@ -108,6 +140,7 @@ function isInExonRegion(pos: number, exons: Exon[]): boolean {
 
 export function GenePage() {
   const { geneId } = useParams<{ geneId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [gene, setGene] = useState<Gene | null>(null);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [exons, setExons] = useState<Exon[]>([]);
@@ -116,9 +149,47 @@ export function GenePage() {
   const [filter, setFilter] = useState<VariantFilter>(DEFAULT_VARIANT_FILTER);
   const [showIntrons, setShowIntrons] = useState(false); // Default: hide introns
 
-  // Filter variants based on filter state and exon visibility
+  // Parse zoom region from URL params
+  const zoomRegion = useMemo(() => {
+    const startParam = searchParams.get('start');
+    const stopParam = searchParams.get('stop');
+    if (startParam && stopParam) {
+      const start = parseInt(startParam, 10);
+      const stop = parseInt(stopParam, 10);
+      if (!isNaN(start) && !isNaN(stop) && start < stop) {
+        return { start, stop };
+      }
+    }
+    return null;
+  }, [searchParams]);
+
+  // Determine if we're zoomed in
+  const isZoomed = zoomRegion !== null;
+
+  // Handle region change from GenomeBrowser drag selection
+  const handleRegionChange = useCallback((region: { start: number; stop: number }) => {
+    setSearchParams({
+      start: region.start.toString(),
+      stop: region.stop.toString(),
+    });
+  }, [setSearchParams]);
+
+  // Handle reset zoom
+  const handleResetZoom = useCallback(() => {
+    setSearchParams({});
+  }, [setSearchParams]);
+
+  // Filter variants based on filter state, exon visibility, and zoom region
   const filteredVariants = useMemo(() => {
     let result = filterVariants(variants, filter);
+
+    // Filter by zoom region if zoomed
+    if (zoomRegion) {
+      result = result.filter(v => {
+        const pos = v.pos || v.locus?.position || 0;
+        return pos >= zoomRegion.start && pos <= zoomRegion.stop;
+      });
+    }
 
     // Also filter by exon regions if introns are hidden
     if (!showIntrons && exons.length > 0) {
@@ -129,7 +200,7 @@ export function GenePage() {
     }
 
     return result;
-  }, [variants, filter, showIntrons, exons]);
+  }, [variants, filter, showIntrons, exons, zoomRegion]);
 
   useEffect(() => {
     if (!geneId) return;
@@ -255,6 +326,17 @@ export function GenePage() {
 
       {variants.length > 0 && (
         <>
+          {isZoomed && zoomRegion && (
+            <ZoomControlsWrapper>
+              <ZoomInfo>
+                Viewing: <strong>{gene.chrom}:{zoomRegion.start.toLocaleString()}-{zoomRegion.stop.toLocaleString()}</strong>
+                {' '}({(zoomRegion.stop - zoomRegion.start).toLocaleString()} bp)
+              </ZoomInfo>
+              <ZoomButton onClick={handleResetZoom}>
+                Reset to full gene
+              </ZoomButton>
+            </ZoomControlsWrapper>
+          )}
           <GenomeBrowser
             gene={gene}
             variants={filteredVariants}
@@ -262,6 +344,8 @@ export function GenePage() {
             showIntrons={showIntrons}
             onShowIntronsChange={setShowIntrons}
             regionUrl={`/region/${regionString}`}
+            region={zoomRegion ?? undefined}
+            onRegionChange={handleRegionChange}
           />
           <VariantFilterControls value={filter} onChange={setFilter} />
         </>

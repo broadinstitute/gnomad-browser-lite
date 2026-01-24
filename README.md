@@ -11,15 +11,63 @@ A lightweight, standalone variant browser that uses DuckDB and Parquet files for
 
 - Rust 1.70+
 - Node.js 20.19+ (or 22.12+)
+- pnpm
+- [DuckDB](https://duckdb.org/) (system library, e.g., `brew install duckdb`)
 - [`hail-decoder`](https://github.com/broadinstitute/hail-rust-decoder) CLI (for exporting data to Parquet)
 
-## Data Setup
+## Quick Start
 
-Before running the browser, you need to export the variant and gene data to Parquet format.
+```bash
+./scripts/setup.sh
+```
 
-### 1. Define Test Intervals
+This will:
+1. Export variant and gene data from gnomAD to Parquet files
+2. Build the backend
+3. Install frontend dependencies
+4. Generate port configuration
 
-The test intervals are pre-configured in `data/test_intervals.json`:
+Then start the servers:
+
+```bash
+./scripts/start-backend.sh   # Terminal 1
+./scripts/start-frontend.sh  # Terminal 2
+```
+
+- Backend: http://localhost:3000
+- Frontend: http://localhost:5173
+
+## Working with Worktrees
+
+For parallel development on multiple branches, create isolated worktrees with unique ports:
+
+```bash
+# Create a worktree with its own data and ports
+./scripts/setup.sh --create-worktree ../my-feature
+
+# Or setup an existing worktree
+./scripts/setup.sh --worktree-name my-feature
+```
+
+Each worktree gets deterministic ports based on its name, so multiple instances can run simultaneously without conflicts.
+
+### Setup Options
+
+```bash
+./scripts/setup.sh [OPTIONS]
+
+Options:
+    --worktree-name NAME    Name for unique port generation
+    --create-worktree PATH  Create a new git worktree at PATH
+    --branch BRANCH         Branch for new worktree (default: new branch from HEAD)
+    --intervals FILE        Intervals file for data export (default: data/test_intervals.json)
+    --skip-data             Skip parquet data export
+    --skip-build            Skip backend/frontend builds
+```
+
+## Data Configuration
+
+The test intervals are configured in `data/test_intervals.json`:
 ```json
 [
   {"contig": "chr1", "start": 55039000, "end": 55065000},
@@ -27,46 +75,7 @@ The test intervals are pre-configured in `data/test_intervals.json`:
 ]
 ```
 
-These intervals cover PCSK9 and BRCA1 genes.
-
-### 2. Export Variants to Parquet
-
-```bash
-hail-decoder export parquet \
-  --input "gs://gcp-public-data--gnomad/release/4.1/ht/browser/gnomad.browser.v4.1.sites.ht" \
-  --output data/variants.parquet \
-  --intervals-file data/test_intervals.json
-```
-
-### 3. Export Gene Models to Parquet
-
-```bash
-hail-decoder export parquet \
-  --input "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht" \
-  --output data/genes.parquet \
-  --intervals-file data/test_intervals.json
-```
-
-## Running the Application
-
-### Backend
-
-```bash
-cd backend
-cargo run
-```
-
-The API server will start on `http://localhost:3000`.
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The frontend will start on `http://localhost:5173`.
+These intervals cover PCSK9 and BRCA1 genes. Edit this file and re-run setup to include different regions.
 
 ## API Endpoints
 
@@ -83,6 +92,10 @@ The frontend will start on `http://localhost:5173`.
 
 ```
 gnomad-browser-lite/
+├── scripts/                   # Setup and run scripts
+│   ├── setup.sh              # Main setup script
+│   ├── start-backend.sh      # Start backend server
+│   └── start-frontend.sh     # Start frontend dev server
 ├── data/                      # Parquet files and intervals config
 │   ├── test_intervals.json    # Genomic intervals to export
 │   ├── variants.parquet       # Exported variant data (gitignored)
@@ -122,7 +135,7 @@ cargo run     # Run server
 
 ```bash
 cd frontend
-npm run dev      # Development server
-npm run build    # Production build
-npm run preview  # Preview production build
+pnpm dev      # Development server
+pnpm build    # Production build
+pnpm preview  # Preview production build
 ```

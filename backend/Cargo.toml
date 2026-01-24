@@ -3,10 +3,14 @@ name = "backend"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+bundled = ["duckdb/bundled"]  # Use for production builds without system DuckDB
+
 [dependencies]
 axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
-duckdb = { version = "1.0", features = ["bundled"] }
+duckdb = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tower-http = { version = "0.5", features = ["cors"] }

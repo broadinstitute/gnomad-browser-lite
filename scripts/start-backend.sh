@@ -23,5 +23,6 @@ if command -v cargo-watch &>/dev/null; then
     echo "  (hot reload enabled via cargo-watch)"
     DATA_DIR="$DATA_DIR" PORT="$PORT" cargo watch -x "run --release"
 else
+    echo "  (tip: install cargo-watch for hot reload: cargo install cargo-watch)"
     DATA_DIR="$DATA_DIR" PORT="$PORT" cargo run --release
 fi

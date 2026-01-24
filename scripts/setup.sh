@@ -118,7 +118,8 @@ if [[ "$SKIP_BUILD" != "true" ]]; then
     (cd backend && cargo build --release)
 
     echo ""
-    echo "Installing frontend dependencies..."
+    echo "Installing dependencies..."
+    pnpm install
     (cd frontend && pnpm install)
 else
     echo "Skipping builds"

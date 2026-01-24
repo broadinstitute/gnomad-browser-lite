@@ -14,6 +14,7 @@ A lightweight, standalone variant browser that uses DuckDB and Parquet files for
 - pnpm
 - [DuckDB](https://duckdb.org/) (system library, e.g., `brew install duckdb`)
 - [`hail-decoder`](https://github.com/broadinstitute/hail-rust-decoder) CLI (for exporting data to Parquet)
+- Optional: `cargo-watch` for backend hot reload (`cargo install cargo-watch`)
 
 ## Quick Start
 

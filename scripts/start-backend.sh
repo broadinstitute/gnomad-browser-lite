@@ -16,4 +16,12 @@ PORT="${PORT:-3000}"
 DATA_DIR="${DATA_DIR:-../data}"
 
 echo "Starting backend on http://localhost:$PORT"
-cd backend && DATA_DIR="$DATA_DIR" PORT="$PORT" cargo run --release
+cd backend
+
+# Use cargo-watch for hot reload if available, otherwise regular cargo run
+if command -v cargo-watch &>/dev/null; then
+    echo "  (hot reload enabled via cargo-watch)"
+    DATA_DIR="$DATA_DIR" PORT="$PORT" cargo watch -x "run --release"
+else
+    DATA_DIR="$DATA_DIR" PORT="$PORT" cargo run --release
+fi

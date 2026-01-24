@@ -50,15 +50,17 @@ export function mergeOverlappingRegions(regions: Region[]): Region[] {
  * Supports both forward (position -> pixel) and inverse (pixel -> position) mapping.
  *
  * The scale distributes pixel width proportionally across regions based on their
- * base pair size, with visual gaps between regions handled automatically.
+ * base pair size, with visual gaps between regions.
  *
  * @param domainRegions - Array of genomic regions (should be merged/non-overlapping)
  * @param range - Pixel range [start, end] for the output
+ * @param gapWidth - Pixel width of gaps between regions (default 4)
  * @returns Scale function with .invert() method
  */
 export function regionViewerScale(
   domainRegions: Region[],
-  range: [number, number]
+  range: [number, number],
+  gapWidth: number = 4
 ): ScalePosition {
   if (domainRegions.length === 0) {
     // Return identity scale for empty regions
@@ -72,34 +74,78 @@ export function regionViewerScale(
     0
   );
 
-  const scale = ((position: number): number => {
-    // Calculate how far into the regions this position falls
-    const distanceToPosition = domainRegions
-      .filter(region => region.start <= position)
-      .reduce(
-        (acc, region) =>
-          region.start <= position && position <= region.stop
-            ? acc + position - region.start
-            : acc + (region.stop - region.start + 1),
-        0
-      );
+  // Calculate total gap space and available width for regions
+  const numGaps = domainRegions.length - 1;
+  const totalGapWidth = numGaps * gapWidth;
+  const availableWidth = (range[1] - range[0]) - totalGapWidth;
 
-    return range[0] + (range[1] - range[0]) * (distanceToPosition / totalRegionSize);
+  // Pre-calculate region boundaries in pixel space
+  const regionBoundaries: { start: number; stop: number; pixelStart: number; pixelEnd: number }[] = [];
+  let currentPixel = range[0];
+
+  for (let i = 0; i < domainRegions.length; i++) {
+    const region = domainRegions[i];
+    const regionSize = region.stop - region.start + 1;
+    const regionWidth = (regionSize / totalRegionSize) * availableWidth;
+
+    regionBoundaries.push({
+      start: region.start,
+      stop: region.stop,
+      pixelStart: currentPixel,
+      pixelEnd: currentPixel + regionWidth,
+    });
+
+    currentPixel += regionWidth + gapWidth;
+  }
+
+  const scale = ((position: number): number => {
+    // Find which region contains this position
+    for (const boundary of regionBoundaries) {
+      if (position >= boundary.start && position <= boundary.stop) {
+        const relativePos = (position - boundary.start) / (boundary.stop - boundary.start + 1);
+        return boundary.pixelStart + relativePos * (boundary.pixelEnd - boundary.pixelStart);
+      }
+    }
+
+    // Position is in a gap - find nearest region edge
+    for (let i = 0; i < regionBoundaries.length; i++) {
+      const boundary = regionBoundaries[i];
+      if (position < boundary.start) {
+        return boundary.pixelStart;
+      }
+      if (i < regionBoundaries.length - 1 && position > boundary.stop) {
+        const nextBoundary = regionBoundaries[i + 1];
+        if (position < nextBoundary.start) {
+          // In the gap - return end of current region
+          return boundary.pixelEnd;
+        }
+      }
+    }
+
+    return regionBoundaries[regionBoundaries.length - 1].pixelEnd;
   }) as ScalePosition;
 
   scale.invert = (x: number): number => {
     const clampedX = Math.max(Math.min(x, range[1]), range[0]);
-    let distanceToPosition = Math.floor(
-      totalRegionSize * ((clampedX - range[0]) / (range[1] - range[0]))
-    );
 
-    for (let i = 0; i < domainRegions.length; i += 1) {
-      const region = domainRegions[i];
-      const regionSize = region.stop - region.start + 1;
-      if (distanceToPosition < regionSize) {
-        return region.start + distanceToPosition;
+    // Find which region or gap contains this pixel
+    for (let i = 0; i < regionBoundaries.length; i++) {
+      const boundary = regionBoundaries[i];
+
+      if (clampedX >= boundary.pixelStart && clampedX <= boundary.pixelEnd) {
+        // Inside a region
+        const relativePixel = (clampedX - boundary.pixelStart) / (boundary.pixelEnd - boundary.pixelStart);
+        return Math.round(boundary.start + relativePixel * (boundary.stop - boundary.start));
       }
-      distanceToPosition -= regionSize;
+
+      // Check if in gap after this region
+      if (i < regionBoundaries.length - 1) {
+        const nextBoundary = regionBoundaries[i + 1];
+        if (clampedX > boundary.pixelEnd && clampedX < nextBoundary.pixelStart) {
+          // In the gap - return end of current region
+          return boundary.stop;
+        }
+      }
     }
 
     return domainRegions[domainRegions.length - 1].stop;

@@ -6,6 +6,7 @@ import type { Gene, Variant, Exon } from '../api/types';
 import { getGeneSymbol } from '../api/types';
 import { VariantsTable } from '../components/VariantsTable';
 import { GenomeBrowser } from '../components/GenomeBrowser';
+import { ZoomOverview } from '../components/ZoomOverview';
 import {
   VariantFilterControls,
   DEFAULT_VARIANT_FILTER,
@@ -98,38 +99,6 @@ const Breadcrumb = styled.nav`
     &:hover {
       text-decoration: underline;
     }
-  }
-`;
-
-const ZoomControlsWrapper = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.5rem;
-  background: #f8f9fa;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  font-size: 14px;
-`;
-
-const ZoomInfo = styled.span`
-  color: #333;
-`;
-
-const ZoomButton = styled.button`
-  padding: 0.375rem 0.75rem;
-  border: 1px solid #1976d2;
-  border-radius: 4px;
-  background: #1976d2;
-  color: white;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-
-  &:hover {
-    background: #1565c0;
-    border-color: #1565c0;
   }
 `;
 
@@ -327,15 +296,13 @@ export function GenePage() {
       {variants.length > 0 && (
         <>
           {isZoomed && zoomRegion && (
-            <ZoomControlsWrapper>
-              <ZoomInfo>
-                Viewing: <strong>{gene.chrom}:{zoomRegion.start.toLocaleString()}-{zoomRegion.stop.toLocaleString()}</strong>
-                {' '}({(zoomRegion.stop - zoomRegion.start).toLocaleString()} bp)
-              </ZoomInfo>
-              <ZoomButton onClick={handleResetZoom}>
-                Reset to full gene
-              </ZoomButton>
-            </ZoomControlsWrapper>
+            <ZoomOverview
+              gene={gene}
+              exons={exons}
+              zoomRegion={zoomRegion}
+              onRegionChange={handleRegionChange}
+              onReset={handleResetZoom}
+            />
           )}
           <GenomeBrowser
             gene={gene}

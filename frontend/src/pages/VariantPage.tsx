@@ -7,6 +7,8 @@ import { PopulationsTable } from '../components/PopulationsTable';
 import { TranscriptConsequenceList } from '../components/TranscriptConsequenceList';
 import { InSilicoPredictors } from '../components/InSilicoPredictors';
 import { VariantOccurrenceTable } from '../components/VariantOccurrenceTable';
+import { VariantSiteQualityMetrics } from '../components/VariantSiteQualityMetrics';
+import { VariantGenotypeQualityMetrics } from '../components/VariantGenotypeQualityMetrics';
 
 // Population display names (matching gnomAD)
 const POPULATION_NAMES: Record<string, string> = {
@@ -263,6 +265,30 @@ const CoverageGrid = styled.div`
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 1rem;
   padding: 1rem;
+  background: #f8f8f8;
+  border-radius: 4px;
+`;
+
+const QualityMetricsWrapper = styled.div`
+  display: flex;
+  flex-flow: row wrap;
+  justify-content: space-between;
+  gap: 2rem;
+`;
+
+const QualityMetricsSection = styled.section`
+  flex: 1;
+  min-width: 300px;
+
+  @media (max-width: 992px) {
+    width: 100%;
+  }
+`;
+
+const QualityMetricsPlaceholder = styled.div`
+  padding: 2rem;
+  text-align: center;
+  color: #666;
   background: #f8f8f8;
   border-radius: 4px;
 `;
@@ -590,38 +616,17 @@ export function VariantPage() {
         </>
       )}
 
-      {/* Site Quality / Coverage */}
-      {variant.coverage?.genome && (
-        <>
+      {/* Genotype and Site Quality Metrics - two column layout */}
+      <QualityMetricsWrapper>
+        <QualityMetricsSection>
+          <SectionTitle>Genotype Quality Metrics</SectionTitle>
+          <VariantGenotypeQualityMetrics variant={variant} />
+        </QualityMetricsSection>
+        <QualityMetricsSection>
           <SectionTitle>Site Quality Metrics</SectionTitle>
-          <CoverageGrid>
-            {variant.coverage.genome.mean !== undefined && (
-              <SummaryItem>
-                <SummaryLabel>Mean Coverage</SummaryLabel>
-                <SummaryValue>{variant.coverage.genome.mean.toFixed(1)}x</SummaryValue>
-              </SummaryItem>
-            )}
-            {variant.coverage.genome.median_approx !== undefined && (
-              <SummaryItem>
-                <SummaryLabel>Median Coverage</SummaryLabel>
-                <SummaryValue>{variant.coverage.genome.median_approx.toFixed(1)}x</SummaryValue>
-              </SummaryItem>
-            )}
-            {variant.coverage.genome.over_20 !== undefined && (
-              <SummaryItem>
-                <SummaryLabel>Samples with &gt;20x</SummaryLabel>
-                <SummaryValue>{(variant.coverage.genome.over_20 * 100).toFixed(1)}%</SummaryValue>
-              </SummaryItem>
-            )}
-            {variant.coverage.genome.over_30 !== undefined && (
-              <SummaryItem>
-                <SummaryLabel>Samples with &gt;30x</SummaryLabel>
-                <SummaryValue>{(variant.coverage.genome.over_30 * 100).toFixed(1)}%</SummaryValue>
-              </SummaryItem>
-            )}
-          </CoverageGrid>
-        </>
-      )}
+          <VariantSiteQualityMetrics variant={variant} />
+        </QualityMetricsSection>
+      </QualityMetricsWrapper>
 
     </Container>
   );

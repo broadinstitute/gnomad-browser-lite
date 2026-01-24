@@ -295,6 +295,8 @@ impl Database {
                 to_json(alleles) AS alleles,
                 to_json(rsids) AS rsids,
                 caid,
+                to_json(exome) AS exome,
+                to_json(genome) AS genome,
                 to_json(transcript_consequences) AS transcript_consequences,
                 to_json(in_silico_predictors) AS in_silico_predictors,
                 to_json(joint) AS joint,

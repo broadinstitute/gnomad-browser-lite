@@ -147,6 +147,44 @@ export interface InSilicoPredictors {
   polyphen_max?: number;
 }
 
+// ==================== Quality Metrics Types ====================
+
+export interface SiteQualityMetric {
+  metric: string;
+  value: number | null;
+}
+
+export interface HistogramData {
+  bin_edges: number[];
+  bin_freq: number[];
+  n_larger?: number;
+  n_smaller?: number;
+}
+
+export interface HistogramSet {
+  all?: HistogramData;
+  alt?: HistogramData;
+  all_adj?: HistogramData;
+  all_raw?: HistogramData;
+  alt_adj?: HistogramData;
+  alt_raw?: HistogramData;
+}
+
+export interface VariantQualityMetrics {
+  allele_balance?: HistogramSet;
+  genotype_depth?: HistogramSet;
+  genotype_quality?: HistogramSet;
+  site_quality_metrics?: SiteQualityMetric[];
+}
+
+export interface SequencingTypeData {
+  ac?: number;
+  an?: number;
+  homozygote_count?: number;
+  hemizygote_count?: number;
+  quality_metrics?: VariantQualityMetrics;
+}
+
 export interface VariantDetails extends Variant {
   caid?: string;
 
@@ -192,4 +230,8 @@ export interface VariantDetails extends Variant {
       over_100?: number;
     };
   };
+
+  // Sequencing type data (exome/genome) with quality metrics
+  exome?: SequencingTypeData | null;
+  genome?: SequencingTypeData | null;
 }

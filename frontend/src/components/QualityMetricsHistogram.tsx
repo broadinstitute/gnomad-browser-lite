@@ -3,7 +3,7 @@ import styled from 'styled-components';
 import { scaleBand, scaleLinear } from '@visx/scale';
 import { Group } from '@visx/group';
 import { Bar } from '@visx/shape';
-import { AxisBottom, AxisLeft } from '@visx/axis';
+import { AxisBottom, AxisLeft, AxisRight } from '@visx/axis';
 import { GridRows } from '@visx/grid';
 
 // Types
@@ -19,8 +19,14 @@ interface QualityMetricsHistogramProps {
   variantData?: HistogramBinData;
   /** Histogram data for all individuals (optional, for comparison) */
   allData?: HistogramBinData;
+  /** Secondary histogram data for variant carriers (for overlaid mode - genome) */
+  secondaryVariantData?: HistogramBinData;
+  /** Secondary histogram data for all individuals (for overlaid mode - genome) */
+  secondaryAllData?: HistogramBinData;
   /** Whether to show comparison with all individuals */
   showComparison?: boolean;
+  /** Whether to show overlaid exome + genome */
+  overlaid?: boolean;
   /** Width of the chart */
   width?: number;
   /** Height of the chart */
@@ -80,19 +86,39 @@ const LegendSwatch = styled.div<{ $color: string; $striped?: boolean }>`
 // Constants
 const EXOME_COLOR = '#428bca';
 const GENOME_COLOR = '#73ab3d';
-const MARGIN = { top: 20, right: 30, bottom: 50, left: 60 };
+const ALL_INDIVIDUALS_COLOR = '#999';
+
+// Format large numbers for axis ticks (integers only for counts)
+function formatAxisTick(value: number): string {
+  if (!Number.isInteger(value)) return '';
+  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(0)}K`;
+  return value.toString();
+}
 
 export function QualityMetricsHistogram({
   variantData,
   allData,
+  secondaryVariantData,
+  secondaryAllData,
   showComparison = false,
-  width = 400,
-  height = 250,
+  overlaid = false,
+  width = 450,
+  height = 260,
   xLabel = 'Quality Score',
-  yLabel = 'Count',
   dataSource = 'exome',
 }: QualityMetricsHistogramProps) {
-  const barColor = dataSource === 'exome' ? EXOME_COLOR : GENOME_COLOR;
+  const exomeColor = EXOME_COLOR;
+  const genomeColor = GENOME_COLOR;
+  const barColor = dataSource === 'exome' ? exomeColor : genomeColor;
+
+  // Margins - increase right margin when showing comparison for dual y-axis
+  const margin = useMemo(() => ({
+    top: 20,
+    right: showComparison ? 90 : 30,
+    bottom: 50,
+    left: 70,
+  }), [showComparison]);
 
   // Prepare data for visualization
   const chartData = useMemo(() => {
@@ -102,6 +128,8 @@ export function QualityMetricsHistogram({
       label: string;
       variantCount: number;
       allCount: number;
+      secondaryVariantCount: number;
+      secondaryAllCount: number;
       binStart: number;
       binEnd: number;
     }> = [];
@@ -114,26 +142,34 @@ export function QualityMetricsHistogram({
         label: i === variantData.bin_freq.length - 1 ? `>${binStart}` : `${binStart}-${binEnd}`,
         variantCount: variantData.bin_freq[i],
         allCount: allData?.bin_freq?.[i] ?? 0,
+        secondaryVariantCount: secondaryVariantData?.bin_freq?.[i] ?? 0,
+        secondaryAllCount: secondaryAllData?.bin_freq?.[i] ?? 0,
         binStart,
         binEnd,
       });
     }
 
     return bins;
-  }, [variantData, allData]);
+  }, [variantData, allData, secondaryVariantData, secondaryAllData]);
 
   if (!variantData || chartData.length === 0) {
     return <NoDataMessage>No histogram data available</NoDataMessage>;
   }
 
   // Calculate dimensions
-  const innerWidth = width - MARGIN.left - MARGIN.right;
-  const innerHeight = height - MARGIN.top - MARGIN.bottom;
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
 
-  // Calculate max value for y-axis
-  const maxCount = Math.max(
-    ...chartData.map(d => Math.max(d.variantCount, showComparison ? d.allCount : 0))
-  );
+  // Calculate max values for each y-axis
+  // In stacked mode, max is the sum of exome + genome
+  const maxVariantCount = overlaid
+    ? Math.max(...chartData.map(d => d.variantCount + d.secondaryVariantCount), 1)
+    : Math.max(...chartData.map(d => d.variantCount), 1);
+  const maxAllCount = showComparison
+    ? (overlaid
+        ? Math.max(...chartData.map(d => d.allCount + d.secondaryAllCount), 1)
+        : Math.max(...chartData.map(d => d.allCount), 1))
+    : 0;
 
   // Scales
   const xScale = scaleBand<string>({
@@ -142,8 +178,16 @@ export function QualityMetricsHistogram({
     padding: 0.2,
   });
 
-  const yScale = scaleLinear<number>({
-    domain: [0, maxCount * 1.1], // Add 10% padding
+  // Left y-axis scale for variant carriers
+  const yScaleVariant = scaleLinear<number>({
+    domain: [0, maxVariantCount * 1.1],
+    range: [innerHeight, 0],
+    nice: true,
+  });
+
+  // Right y-axis scale for all individuals (different scale)
+  const yScaleAll = scaleLinear<number>({
+    domain: [0, maxAllCount * 1.1],
     range: [innerHeight, 0],
     nice: true,
   });
@@ -152,51 +196,115 @@ export function QualityMetricsHistogram({
     <Container>
       <ChartWrapper>
         <svg width={width} height={height}>
-          <Group left={MARGIN.left} top={MARGIN.top}>
-            {/* Grid lines */}
+          <Group left={margin.left} top={margin.top}>
+            {/* Grid lines based on variant scale */}
             <GridRows
-              scale={yScale}
+              scale={yScaleVariant}
               width={innerWidth}
               stroke="#e0e0e0"
               strokeOpacity={0.5}
             />
 
-            {/* Bars for all individuals (if showing comparison) */}
+            {/* Bars for all individuals (if showing comparison) - use right y-axis scale */}
             {showComparison && chartData.map((d, i) => {
               const barWidth = xScale.bandwidth();
-              const barHeight = innerHeight - (yScale(d.allCount) ?? 0);
               const barX = xScale(d.label) ?? 0;
-              const barY = yScale(d.allCount) ?? 0;
 
+              if (overlaid) {
+                // Stacked bars: exome on bottom, genome on top
+                const exomeHeight = innerHeight - (yScaleAll(d.allCount) ?? 0);
+                const genomeHeight = innerHeight - (yScaleAll(d.secondaryAllCount) ?? 0);
+                const exomeY = innerHeight - exomeHeight;
+                const genomeY = exomeY - genomeHeight;
+
+                return (
+                  <React.Fragment key={`all-${i}`}>
+                    {/* Exome bar (bottom) */}
+                    <Bar
+                      x={barX}
+                      y={exomeY}
+                      width={barWidth}
+                      height={exomeHeight}
+                      fill={`url(#stripe-pattern-exome)`}
+                      stroke={exomeColor}
+                      strokeWidth={1}
+                      opacity={0.8}
+                    />
+                    {/* Genome bar (stacked on top) */}
+                    <Bar
+                      x={barX}
+                      y={genomeY}
+                      width={barWidth}
+                      height={genomeHeight}
+                      fill={`url(#stripe-pattern-genome)`}
+                      stroke={genomeColor}
+                      strokeWidth={1}
+                      opacity={0.8}
+                    />
+                  </React.Fragment>
+                );
+              }
+
+              // Non-stacked single bar - use pattern matching the data source
               return (
                 <Bar
                   key={`all-${i}`}
                   x={barX}
-                  y={barY}
+                  y={yScaleAll(d.allCount) ?? 0}
                   width={barWidth}
-                  height={barHeight}
+                  height={innerHeight - (yScaleAll(d.allCount) ?? 0)}
                   fill={`url(#stripe-pattern-${dataSource})`}
                   stroke={barColor}
                   strokeWidth={1}
-                  opacity={0.5}
+                  opacity={0.8}
                 />
               );
             })}
 
-            {/* Bars for variant carriers */}
+            {/* Bars for variant carriers - use left y-axis scale */}
             {chartData.map((d, i) => {
               const barWidth = xScale.bandwidth();
-              const barHeight = innerHeight - (yScale(d.variantCount) ?? 0);
               const barX = xScale(d.label) ?? 0;
-              const barY = yScale(d.variantCount) ?? 0;
 
+              if (overlaid) {
+                // Stacked bars: exome on bottom, genome on top
+                const exomeHeight = innerHeight - (yScaleVariant(d.variantCount) ?? 0);
+                const genomeHeight = innerHeight - (yScaleVariant(d.secondaryVariantCount) ?? 0);
+                const exomeY = innerHeight - exomeHeight;
+                const genomeY = exomeY - genomeHeight;
+
+                return (
+                  <React.Fragment key={`variant-${i}`}>
+                    {/* Exome bar (bottom) */}
+                    <Bar
+                      x={barX}
+                      y={exomeY}
+                      width={barWidth}
+                      height={exomeHeight}
+                      fill={exomeColor}
+                      opacity={0.8}
+                    />
+                    {/* Genome bar (stacked on top) */}
+                    <Bar
+                      x={barX}
+                      y={genomeY}
+                      width={barWidth}
+                      height={genomeHeight}
+                      fill={genomeColor}
+                      opacity={0.8}
+                    />
+                  </React.Fragment>
+                );
+              }
+
+              // Non-stacked single bar
               return (
                 <Bar
                   key={`variant-${i}`}
                   x={barX}
-                  y={barY}
+                  y={yScaleVariant(d.variantCount) ?? 0}
                   width={barWidth}
-                  height={barHeight}
+                  height={innerHeight - (yScaleVariant(d.variantCount) ?? 0)}
                   fill={barColor}
                   opacity={0.8}
                 />
@@ -209,49 +317,95 @@ export function QualityMetricsHistogram({
               scale={xScale}
               tickLabelProps={() => ({
                 fill: '#666',
-                fontSize: 10,
+                fontSize: 9,
                 textAnchor: 'middle',
               })}
               label={xLabel}
               labelProps={{
                 fill: '#333',
-                fontSize: 12,
+                fontSize: 11,
                 textAnchor: 'middle',
               }}
               labelOffset={15}
-              numTicks={Math.min(chartData.length, 10)}
+              tickLength={4}
             />
 
-            {/* Y Axis */}
+            {/* Left Y Axis - Variant Carriers */}
             <AxisLeft
-              scale={yScale}
+              scale={yScaleVariant}
               tickLabelProps={() => ({
-                fill: '#666',
+                fill: barColor,
                 fontSize: 10,
                 textAnchor: 'end',
                 dy: '0.33em',
               })}
-              label={yLabel}
+              label="Variant carriers"
               labelProps={{
-                fill: '#333',
-                fontSize: 12,
+                fill: barColor,
+                fontSize: 11,
                 textAnchor: 'middle',
               }}
               labelOffset={40}
+              tickLength={4}
+              stroke={barColor}
+              tickStroke={barColor}
+              tickFormat={formatAxisTick}
+              numTicks={Math.min(maxVariantCount, 6)}
+              tickValues={maxVariantCount <= 10
+                ? Array.from({ length: maxVariantCount + 1 }, (_, i) => i)
+                : undefined}
             />
 
-            {/* Stripe pattern definition */}
+            {/* Right Y Axis - All Individuals (only when showing comparison) */}
+            {showComparison && (
+              <AxisRight
+                left={innerWidth}
+                scale={yScaleAll}
+                tickLabelProps={() => ({
+                  fill: ALL_INDIVIDUALS_COLOR,
+                  fontSize: 10,
+                  textAnchor: 'start',
+                  dx: '0.5em',
+                  dy: '0.33em',
+                })}
+                label="All individuals"
+                labelProps={{
+                  fill: ALL_INDIVIDUALS_COLOR,
+                  fontSize: 11,
+                  textAnchor: 'middle',
+                }}
+                labelOffset={55}
+                tickLength={4}
+                stroke={ALL_INDIVIDUALS_COLOR}
+                tickStroke={ALL_INDIVIDUALS_COLOR}
+                tickFormat={formatAxisTick}
+              />
+            )}
+
+            {/* Stripe pattern definitions */}
             <defs>
               <pattern
-                id={`stripe-pattern-${dataSource}`}
+                id="stripe-pattern-exome"
                 patternUnits="userSpaceOnUse"
-                width="4"
-                height="4"
+                width="5"
+                height="5"
               >
                 <path
-                  d="M-1,1 l2,-2 M0,4 l4,-4 M3,5 l2,-2"
-                  stroke={barColor}
-                  strokeWidth="1"
+                  d="M-1,1 l2,-2 M0,5 l5,-5 M4,6 l2,-2"
+                  stroke={exomeColor}
+                  strokeWidth="2"
+                />
+              </pattern>
+              <pattern
+                id="stripe-pattern-genome"
+                patternUnits="userSpaceOnUse"
+                width="5"
+                height="5"
+              >
+                <path
+                  d="M-1,1 l2,-2 M0,5 l5,-5 M4,6 l2,-2"
+                  stroke={genomeColor}
+                  strokeWidth="2"
                 />
               </pattern>
             </defs>
@@ -261,15 +415,36 @@ export function QualityMetricsHistogram({
 
       {/* Legend */}
       <Legend>
-        <LegendItem>
-          <LegendSwatch $color={barColor} />
-          <span>Variant carriers</span>
-        </LegendItem>
-        {showComparison && (
-          <LegendItem>
-            <LegendSwatch $color={barColor} $striped />
-            <span>All individuals</span>
-          </LegendItem>
+        {overlaid ? (
+          <>
+            <LegendItem>
+              <LegendSwatch $color={exomeColor} />
+              <span>Exome</span>
+            </LegendItem>
+            <LegendItem>
+              <LegendSwatch $color={genomeColor} />
+              <span>Genome</span>
+            </LegendItem>
+            {showComparison && (
+              <LegendItem>
+                <LegendSwatch $color={ALL_INDIVIDUALS_COLOR} $striped />
+                <span>All individuals</span>
+              </LegendItem>
+            )}
+          </>
+        ) : (
+          <>
+            <LegendItem>
+              <LegendSwatch $color={barColor} />
+              <span>Variant carriers</span>
+            </LegendItem>
+            {showComparison && (
+              <LegendItem>
+                <LegendSwatch $color={ALL_INDIVIDUALS_COLOR} $striped />
+                <span>All individuals</span>
+              </LegendItem>
+            )}
+          </>
         )}
       </Legend>
     </Container>

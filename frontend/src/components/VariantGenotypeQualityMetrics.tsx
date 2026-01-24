@@ -67,15 +67,14 @@ const NoDataMessage = styled.p`
 
 const ChartContainer = styled.div`
   display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  justify-content: center;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-items: center;
 `;
 
 const ChartPanel = styled.div`
-  flex: 1;
-  min-width: 280px;
-  max-width: 450px;
+  width: 100%;
+  max-width: 550px;
 `;
 
 const ChartTitle = styled.h4`
@@ -87,7 +86,7 @@ const ChartTitle = styled.h4`
 `;
 
 type MetricTab = 'quality' | 'depth' | 'allele_balance';
-type SequencingType = 'both' | 'exome' | 'genome';
+type PlotType = 'both' | 'exome' | 'genome' | 'overlaid';
 
 interface Props {
   variant: VariantDetails;
@@ -96,7 +95,7 @@ interface Props {
 export function VariantGenotypeQualityMetrics({ variant }: Props) {
   const [activeTab, setActiveTab] = useState<MetricTab>('quality');
   const [showComparison, setShowComparison] = useState(true);
-  const [sequencingType, setSequencingType] = useState<SequencingType>('both');
+  const [plotType, setPlotType] = useState<PlotType>('both');
 
   // Get data based on selected tab
   const getMetricData = (source: 'exome' | 'genome', tab: MetricTab) => {
@@ -149,8 +148,9 @@ export function VariantGenotypeQualityMetrics({ variant }: Props) {
     }
   };
 
-  const showExome = sequencingType === 'both' || sequencingType === 'exome';
-  const showGenome = sequencingType === 'both' || sequencingType === 'genome';
+  const showExome = plotType === 'both' || plotType === 'exome';
+  const showGenome = plotType === 'both' || plotType === 'genome';
+  const isOverlaid = plotType === 'overlaid';
 
   const exomeData = getMetricData('exome', activeTab);
   const genomeData = getMetricData('genome', activeTab);
@@ -183,12 +183,13 @@ export function VariantGenotypeQualityMetrics({ variant }: Props) {
           </ControlGroup>
         )}
         <ControlGroup>
-          Sequencing type:
+          Plot type:
           <Select
-            value={sequencingType}
-            onChange={(e) => setSequencingType(e.target.value as SequencingType)}
+            value={plotType}
+            onChange={(e) => setPlotType(e.target.value as PlotType)}
           >
             <option value="both">Exome and Genome</option>
+            <option value="overlaid" disabled={!hasExomeData || !hasGenomeData}>Stacked</option>
             <option value="exome" disabled={!hasExomeData}>Exome only</option>
             <option value="genome" disabled={!hasGenomeData}>Genome only</option>
           </Select>
@@ -197,35 +198,53 @@ export function VariantGenotypeQualityMetrics({ variant }: Props) {
 
       {/* Charts */}
       <ChartContainer>
-        {showExome && hasExomeData && exomeData && (
+        {isOverlaid && hasExomeData && hasGenomeData && exomeData && genomeData ? (
           <ChartPanel>
-            <ChartTitle>Exome</ChartTitle>
+            <ChartTitle>Exome & Genome (Stacked)</ChartTitle>
             <QualityMetricsHistogram
               variantData={exomeData.variant}
               allData={exomeData.all}
+              secondaryVariantData={genomeData.variant}
+              secondaryAllData={genomeData.all}
               showComparison={showComparison && activeTab !== 'allele_balance'}
               xLabel={getXLabel(activeTab)}
-              yLabel="Variant Carriers"
               dataSource="exome"
-              width={380}
-              height={220}
+              overlaid
+              width={520}
+              height={260}
             />
           </ChartPanel>
-        )}
-        {showGenome && hasGenomeData && genomeData && (
-          <ChartPanel>
-            <ChartTitle>Genome</ChartTitle>
-            <QualityMetricsHistogram
-              variantData={genomeData.variant}
-              allData={genomeData.all}
-              showComparison={showComparison && activeTab !== 'allele_balance'}
-              xLabel={getXLabel(activeTab)}
-              yLabel="Variant Carriers"
-              dataSource="genome"
-              width={380}
-              height={220}
-            />
-          </ChartPanel>
+        ) : (
+          <>
+            {showExome && hasExomeData && exomeData && (
+              <ChartPanel>
+                <ChartTitle>Exome</ChartTitle>
+                <QualityMetricsHistogram
+                  variantData={exomeData.variant}
+                  allData={exomeData.all}
+                  showComparison={showComparison && activeTab !== 'allele_balance'}
+                  xLabel={getXLabel(activeTab)}
+                  dataSource="exome"
+                  width={520}
+                  height={220}
+                />
+              </ChartPanel>
+            )}
+            {showGenome && hasGenomeData && genomeData && (
+              <ChartPanel>
+                <ChartTitle>Genome</ChartTitle>
+                <QualityMetricsHistogram
+                  variantData={genomeData.variant}
+                  allData={genomeData.all}
+                  showComparison={showComparison && activeTab !== 'allele_balance'}
+                  xLabel={getXLabel(activeTab)}
+                  dataSource="genome"
+                  width={520}
+                  height={220}
+                />
+              </ChartPanel>
+            )}
+          </>
         )}
       </ChartContainer>
     </Container>

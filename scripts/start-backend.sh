@@ -9,7 +9,7 @@ cd "$PROJECT_ROOT"
 
 # Load environment if available
 if [[ -f .env ]]; then
-    source .env
+    . ./.env
 fi
 
 PORT="${PORT:-3000}"

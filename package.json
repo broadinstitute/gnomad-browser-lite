@@ -1,0 +1,13 @@
+{
+  "name": "gnomad-browser-lite",
+  "private": true,
+  "scripts": {
+    "start": "concurrently -n backend,frontend -c blue,green \"./scripts/start-backend.sh\" \"./scripts/start-frontend.sh\"",
+    "start:backend": "./scripts/start-backend.sh",
+    "start:frontend": "./scripts/start-frontend.sh",
+    "setup": "./scripts/setup.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

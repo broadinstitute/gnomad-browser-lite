@@ -228,6 +228,7 @@ export function createLollipops(
       labelWidth: estimateLabelWidth(topDisc.label),
       isTopTier: false,
       showLabel: false,
+      labelAngle: 0,  // Will be set during layout
     });
   }
 
@@ -324,38 +325,66 @@ function runTopTierForceLayout(
 }
 
 /**
- * Determine which labels to show based on collision detection
- * Iterates left-to-right, showing labels only when there's room
+ * Calculate horizontal footprint of a label at a given angle
+ */
+function getLabelFootprint(labelWidth: number, angle: number): number {
+  if (angle === 0) {
+    return labelWidth;  // Horizontal: full width
+  } else if (angle === -45) {
+    return labelWidth * 0.707;  // 45°: cos(45°) ≈ 0.707
+  } else if (angle === -90) {
+    return 12;  // Vertical: just font height + padding
+  }
+  return labelWidth * Math.abs(Math.cos(angle * Math.PI / 180));
+}
+
+/**
+ * Determine which labels to show and at what angle based on density
+ * Uses progressive angles: horizontal (0°) -> diagonal (-45°) -> vertical (-90°)
  */
 function resolveLabelCollisions(
   lollipops: LollipopData[],
   width: number
 ): void {
+  if (lollipops.length === 0) return;
+
   // Sort by X position (left to right)
   const sorted = [...lollipops].sort((a, b) => a.x - b.x);
 
-  const labelGap = 4;  // Minimum gap between label end and next disc
-  let rightBoundary = -Infinity;  // Right edge of last shown label
+  // Calculate average spacing to determine density
+  const avgSpacing = sorted.length > 1
+    ? (sorted[sorted.length - 1].x - sorted[0].x) / (sorted.length - 1)
+    : width;
+
+  // Choose angle based on density
+  // Tighter spacing = more aggressive angle
+  let labelAngle = 0;  // Default: horizontal
+  if (avgSpacing < 30) {
+    labelAngle = -90;  // Very dense: vertical
+  } else if (avgSpacing < 60) {
+    labelAngle = -45;  // Medium dense: diagonal
+  }
+
+  const labelGap = 4;
+  let rightBoundary = -Infinity;
 
   for (const lollipop of sorted) {
-    // Calculate where this label would start (right edge of disc + small gap)
+    lollipop.labelAngle = labelAngle;
+
     const labelStart = lollipop.x + lollipop.radius + 3;
+    const footprint = getLabelFootprint(lollipop.labelWidth, labelAngle);
 
     // Check if there's room for this label
     if (labelStart > rightBoundary) {
-      // Show this label
       lollipop.showLabel = true;
-      // Update boundary to include this label
-      rightBoundary = labelStart + lollipop.labelWidth + labelGap;
+      rightBoundary = labelStart + footprint + labelGap;
     } else {
-      // No room - hide this label, but update boundary to disc edge
       lollipop.showLabel = false;
-      // The next label needs to clear at least this disc
       rightBoundary = Math.max(rightBoundary, lollipop.x + lollipop.radius + labelGap);
     }
 
     // Don't let labels extend past the right edge
-    if (rightBoundary > width - 10) {
+    if (labelStart + footprint > width - 10) {
       lollipop.showLabel = false;
     }
   }

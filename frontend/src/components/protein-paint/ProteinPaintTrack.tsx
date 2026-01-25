@@ -195,10 +195,34 @@ export function ProteinPaintTrack({
         ctx.globalAlpha = 1;
         ctx.fillStyle = lollipop.color;
         ctx.font = 'bold 10px sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
+
         const topDiscY = lollipop.y + lollipop.discs[0].radius;
-        ctx.fillText(lollipop.label, x + lollipop.radius + 3, topDiscY);
+        const angle = lollipop.labelAngle;
+
+        if (angle === 0) {
+          // Horizontal label - to the right of disc
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(lollipop.label, x + lollipop.radius + 3, topDiscY);
+        } else if (angle === -90) {
+          // Vertical label - centered above disc
+          ctx.save();
+          ctx.translate(x, lollipop.y - 3);  // Position above the top disc
+          ctx.rotate(-Math.PI / 2);  // -90 degrees
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(lollipop.label, 0, 0);
+          ctx.restore();
+        } else {
+          // Diagonal label (-45°)
+          ctx.save();
+          ctx.translate(x + lollipop.radius + 3, topDiscY);
+          ctx.rotate(angle * Math.PI / 180);
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(lollipop.label, 0, 0);
+          ctx.restore();
+        }
       }
     }
 

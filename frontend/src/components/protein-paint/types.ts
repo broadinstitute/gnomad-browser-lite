@@ -92,6 +92,9 @@ export interface LollipopData {
 
   /** Whether to show the label (false when too dense) */
   showLabel: boolean;
+
+  /** Label rotation angle in degrees (0 = horizontal, -45 = diagonal, -90 = vertical) */
+  labelAngle: number;
 }
 
 /**

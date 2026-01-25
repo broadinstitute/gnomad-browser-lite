@@ -472,7 +472,7 @@ export function GenomeBrowser({
   const setShowIntrons = onShowIntronsChange || setShowIntronsLocal;
 
   // View mode toggle (scatter vs lollipop)
-  const [viewMode, setViewMode] = useState<'scatter' | 'lollipop'>('scatter');
+  const [viewMode, setViewMode] = useState<'scatter' | 'lollipop'>('lollipop');
 
   // Determine the effective view region (zoom region or full gene)
   const viewRegion = useMemo(() => {

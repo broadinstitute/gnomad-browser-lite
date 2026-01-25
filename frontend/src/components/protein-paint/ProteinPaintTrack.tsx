@@ -531,6 +531,15 @@ export function ProteinPaintTrack({
     ? 'pointer'
     : 'crosshair';
 
+  // Check if any positions have been overridden
+  const hasOverrides = Object.keys(positionOverrides).length > 0;
+
+  // Reset all position overrides
+  const handleResetLayout = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation(); // Don't trigger drag or click handlers
+    setPositionOverrides({});
+  }, []);
+
   return (
     <div
       ref={containerRef}
@@ -550,6 +559,26 @@ export function ProteinPaintTrack({
           height: `${renderHeight}px`,
         }}
       />
+      {hasOverrides && (
+        <button
+          onClick={handleResetLayout}
+          style={{
+            position: 'absolute',
+            top: 4,
+            right: 4,
+            padding: '2px 8px',
+            fontSize: '11px',
+            backgroundColor: 'rgba(255, 255, 255, 0.9)',
+            border: '1px solid #ccc',
+            borderRadius: '3px',
+            cursor: 'pointer',
+            color: '#666',
+          }}
+          title="Reset dragged positions"
+        >
+          Reset layout
+        </button>
+      )}
     </div>
   );
 }

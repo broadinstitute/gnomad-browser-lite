@@ -103,7 +103,10 @@ export function ZoomOverview({
   const [dragState, setDragState] = useState<{
     type: 'move' | 'resize-left' | 'resize-right';
     startX: number;
-    startRegion: { start: number; stop: number };
+    startPixel: number; // Selection start pixel position
+    stopPixel: number; // Selection stop pixel position
+    startGenomic: number; // Initial genomic start
+    stopGenomic: number; // Initial genomic stop
   } | null>(null);
 
   // Measure container width
@@ -143,10 +146,6 @@ export function ZoomOverview({
     return regionViewerScale(cdsExons, [0, containerWidth], 3);
   }, [cdsExons, gene.start, gene.stop, containerWidth]);
 
-  // For dragging, we need a linear scale to convert pixel deltas to genomic deltas
-  const linearScale = useMemo((): ScalePosition => {
-    return linearGenomicScale(gene.start, gene.stop, [0, containerWidth], 0);
-  }, [gene.start, gene.stop, containerWidth]);
 
   // Calculate selection position on the collapsed scale
   // Find the exons that overlap with the zoom region and highlight that span
@@ -197,25 +196,26 @@ export function ZoomOverview({
     setDragState({
       type,
       startX: e.clientX,
-      startRegion: { ...zoomRegion },
+      startPixel: scale(zoomRegion.start),
+      stopPixel: scale(zoomRegion.stop),
+      startGenomic: zoomRegion.start,
+      stopGenomic: zoomRegion.stop,
     });
-  }, [zoomRegion]);
+  }, [zoomRegion, scale]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragState) return;
 
     const deltaX = e.clientX - dragState.startX;
-    // Use linear scale for converting pixel deltas to genomic deltas
-    // This ensures dragging moves smoothly through genomic space
-    const deltaGenomic = linearScale.invert(deltaX) - linearScale.invert(0);
 
-    let newStart = dragState.startRegion.start;
-    let newStop = dragState.startRegion.stop;
+    let newStart = dragState.startGenomic;
+    let newStop = dragState.stopGenomic;
 
     if (dragState.type === 'move') {
-      // Move the whole selection
-      newStart = dragState.startRegion.start + deltaGenomic;
-      newStop = dragState.startRegion.stop + deltaGenomic;
+      // Calculate new genomic positions by applying pixel delta to visual positions
+      // This ensures 1:1 movement between cursor and selection on the visual track
+      newStart = scale.invert(dragState.startPixel + deltaX);
+      newStop = scale.invert(dragState.stopPixel + deltaX);
 
       // Clamp to gene boundaries
       if (newStart < gene.start) {
@@ -229,16 +229,18 @@ export function ZoomOverview({
         newStart = newStart - offset;
       }
     } else if (dragState.type === 'resize-left') {
-      newStart = Math.max(gene.start, Math.min(dragState.startRegion.start + deltaGenomic, newStop - 1000));
+      newStart = scale.invert(dragState.startPixel + deltaX);
+      newStart = Math.max(gene.start, Math.min(newStart, newStop - 1));
     } else if (dragState.type === 'resize-right') {
-      newStop = Math.min(gene.stop, Math.max(dragState.startRegion.stop + deltaGenomic, newStart + 1000));
+      newStop = scale.invert(dragState.stopPixel + deltaX);
+      newStop = Math.min(gene.stop, Math.max(newStop, newStart + 1));
     }
 
     onRegionChange({
       start: Math.round(newStart),
       stop: Math.round(newStop),
     });
-  }, [dragState, linearScale, gene.start, gene.stop, onRegionChange]);
+  }, [dragState, scale, gene.start, gene.stop, onRegionChange]);
 
   const handleMouseUp = useCallback(() => {
     setDragState(null);

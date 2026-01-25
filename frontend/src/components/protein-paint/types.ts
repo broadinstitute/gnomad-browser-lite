@@ -13,6 +13,46 @@
 import type { Variant } from '../../api/types';
 
 /**
+ * Generic layer configuration for variant display
+ * Replaces hardcoded tier logic with configurable layer definitions
+ */
+export interface LayerDefinition {
+  /** Unique identifier for this layer */
+  id: string;
+
+  /** Display label (e.g., "Loss of Function") */
+  label: string;
+
+  /**
+   * Predicate to determine if a lollipop belongs to this layer
+   * based on its variants. First matching layer wins.
+   */
+  filter: (variants: Variant[]) => boolean;
+
+  /** Display color for this layer */
+  color: string;
+
+  /** Vertical position (Y coordinate) for disc centers */
+  y: number;
+
+  /**
+   * Layout mode:
+   * - 'expanded': Crankshaft stems, force-directed spread (like current top tiers)
+   * - 'condensed': Straight stems, anchored to genomic position
+   */
+  layout: 'expanded' | 'condensed';
+
+  /**
+   * Y-position for the "knee" of the crankshaft stem (only for expanded layout).
+   * If undefined, calculated based on layer stacking.
+   */
+  kneeY?: number;
+
+  /** Z-index priority (higher renders on top) */
+  zOrder: number;
+}
+
+/**
  * A disc representing one amino acid change (used in stacks)
  */
 export interface StackedDisc {
@@ -96,10 +136,13 @@ export interface LollipopData {
   /** Label rotation angle in degrees (0 = horizontal, -45 = diagonal, -90 = vertical) */
   labelAngle: number;
 
-  /** The tier this lollipop belongs to */
+  /** The layer this lollipop belongs to */
+  layerId: string;
+
+  /** @deprecated Use layerId instead. Kept for backward compatibility */
   tier: TierName;
 
-  /** Whether this tier uses expanded/crank layout */
+  /** Whether this layer uses expanded/crank layout */
   isExpanded: boolean;
 
   /** Whether this variant is user-selected */

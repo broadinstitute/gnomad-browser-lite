@@ -12,12 +12,72 @@
 
 import { forceSimulation, forceX, forceCollide } from 'd3-force';
 import type { Variant } from '../../api/types';
-import type { LollipopData, LayoutParams, StackedDisc, TierName, TierConfig } from './types';
+import type { LollipopData, LayoutParams, StackedDisc, TierName, TierConfig, LayerDefinition } from './types';
 import {
   getVariantPosition,
   getVariantColor,
   getConsequencePriority,
 } from '../variantUtils';
+
+/**
+ * Create standard layer configuration that reproduces current gnomAD behavior
+ * This is the factory function for the default layer setup
+ */
+export function getStandardLayers(height: number): LayerDefinition[] {
+  return [
+    {
+      id: 'lof',
+      label: 'Loss of Function',
+      filter: (variants) => variants.some(v => getConsequencePriority(v.consequence || '') >= 4),
+      color: '#dd3333',
+      y: 60,
+      layout: 'expanded',
+      zOrder: 40,
+    },
+    {
+      id: 'missense',
+      label: 'Missense',
+      filter: (variants) => variants.some(v => getConsequencePriority(v.consequence || '') === 3),
+      color: '#f59e0b',
+      y: height * 0.55,
+      layout: 'condensed',
+      zOrder: 30,
+    },
+    {
+      id: 'synonymous',
+      label: 'Synonymous',
+      filter: (variants) => variants.some(v => getConsequencePriority(v.consequence || '') === 2),
+      color: '#22c55e',
+      y: height * 0.72,
+      layout: 'condensed',
+      zOrder: 20,
+    },
+    {
+      id: 'noncoding',
+      label: 'Non-coding',
+      filter: () => true, // Catch-all for remaining variants
+      color: '#757575',
+      y: height * 0.85,
+      layout: 'condensed',
+      zOrder: 10,
+    },
+  ];
+}
+
+/**
+ * Create a selection layer definition for user-selected variants
+ */
+export function createSelectionLayer(selectedIds: Set<string>): LayerDefinition {
+  return {
+    id: 'selected',
+    label: 'Selected',
+    filter: (variants) => variants.some(v => selectedIds.has(v.variant_id || '')),
+    color: '#1976d2',
+    y: 40,
+    layout: 'expanded',
+    zOrder: 100, // Highest priority
+  };
+}
 
 /**
  * Get layout parameters based on dimensions
@@ -119,12 +179,21 @@ function estimateLabelWidth(label: string): number {
 /**
  * Create lollipop data from variants, grouped by position with stacked discs
  * Multi-allelic variants (different amino acid changes at same position) stack vertically
+ *
+ * @param variants - Array of variants to display
+ * @param scale - Scale function mapping genomic position to pixel X
+ * @param params - Layout parameters
+ * @param layers - Layer configuration (optional, uses standard layers if not provided)
  */
 export function createLollipops(
   variants: Variant[],
   scale: (pos: number) => number,
-  params: LayoutParams
+  params: LayoutParams,
+  layers?: LayerDefinition[]
 ): LollipopData[] {
+  // Use standard layers if not provided
+  const height = params.bottomTierY + 15;
+  const layerConfig = layers || getStandardLayers(height);
   // First, group variants by position
   const positionMap = new Map<number, Variant[]>();
 
@@ -220,6 +289,19 @@ export function createLollipops(
     // Collect all variants at this position
     const allVariants = posVariants;
 
+    // Find the matching layer for this lollipop
+    const matchedLayer = layerConfig.find(layer => layer.filter(allVariants));
+    const layerId = matchedLayer?.id || 'noncoding';
+    const isExpanded = matchedLayer?.layout === 'expanded';
+    const layerY = matchedLayer?.y || params.bottomTierY;
+
+    // Map layerId to TierName for backward compatibility
+    const tier = (layerId === 'lof' || layerId === 'missense' ||
+                  layerId === 'synonymous' || layerId === 'noncoding' ||
+                  layerId === 'selected')
+      ? layerId as TierName
+      : 'noncoding';
+
     lollipops.push({
       id: `pos-${pos}`,
       pos,
@@ -232,14 +314,15 @@ export function createLollipops(
       priority: topDisc.priority,
       anchorX: scale(pos),
       x: scale(pos),
-      y: params.bottomTierY,
+      y: layerY,
       stackHeight,
       labelWidth: estimateLabelWidth(topDisc.label),
-      isTopTier: false,
+      isTopTier: isExpanded,
       showLabel: false,
       labelAngle: 0,  // Will be set during layout
-      tier: 'noncoding',  // Will be set during layout
-      isExpanded: false,  // Will be set during layout
+      layerId,  // New generic layer ID
+      tier,  // Backward compatibility
+      isExpanded,
       isSelected: false,  // Will be set during layout
     });
   }
@@ -288,110 +371,151 @@ export function getTierPositions(height: number): Record<string, number> {
 }
 
 /**
- * Assign lollipops to tiers based on consequence and selection
- * The highest-severity tier present becomes the "top tier" with spread layout
- * Selected variants get their own dedicated tier with X positions pulled toward anchorX
+ * Assign lollipops to layers and run layout algorithms
+ * Uses the generic layer configuration system
+ *
+ * @param lollipops - Lollipops to layout (already assigned to layers by createLollipops)
+ * @param width - Available width for layout
+ * @param params - Layout parameters
+ * @param layers - Layer configuration (optional, uses standard layers if not provided)
  */
 export function layoutLollipops(
   lollipops: LollipopData[],
   width: number,
-  params: LayoutParams
+  params: LayoutParams,
+  layers?: LayerDefinition[]
 ): void {
   if (lollipops.length === 0) return;
 
-  const height = params.bottomTierY + 15; // Approximate total height
-  const tierConfig = getTierConfig(height);
-  const tierY = getTierPositions(height);
+  const height = params.bottomTierY + 15;
   const selectedIds = params.selectedIds || new Set<string>();
 
-  // First pass: assign consequence-based tiers to ALL lollipops (ignoring selection)
-  // This lets us run the spread layout for consequence tiers first
-  const tierOrder: TierName[] = ['selected', 'lof', 'missense', 'synonymous', 'noncoding'];
-  const consequenceTiers: Record<TierName, LollipopData[]> = {
-    selected: [],
-    lof: [],
-    missense: [],
-    synonymous: [],
-    noncoding: [],
-  };
+  // Build layer config: prepend selection layer if there are selected variants
+  let layerConfig = layers || getStandardLayers(height);
 
+  // Check if any variant is selected
+  const hasSelectedVariants = lollipops.some(l =>
+    l.variants.some(v => selectedIds.has(v.variant_id || ''))
+  );
+
+  // If we have selected variants, prepend the selection layer
+  if (hasSelectedVariants) {
+    const selectionLayer = createSelectionLayer(selectedIds);
+    // Only prepend if selection layer isn't already in the config
+    if (!layerConfig.find(l => l.id === 'selected')) {
+      layerConfig = [selectionLayer, ...layerConfig];
+    }
+  }
+
+  // Group lollipops by layer
+  const layerGroups = new Map<string, LollipopData[]>();
+  for (const layer of layerConfig) {
+    layerGroups.set(layer.id, []);
+  }
+
+  // Mark selection status and re-assign to layers if selection layer is active
   for (const lollipop of lollipops) {
     const isSelected = lollipop.variants.some(v => selectedIds.has(v.variant_id || ''));
     lollipop.isSelected = isSelected;
 
-    // Always assign by consequence first (for layout purposes)
-    const consequenceTier = getTierFromPriority(lollipop.priority);
-    consequenceTiers[consequenceTier].push(lollipop);
-
-    // Store the consequence tier for reference
-    lollipop.tier = consequenceTier;
-    lollipop.y = tierY[consequenceTier];
-    lollipop.isExpanded = tierConfig[consequenceTier].expanded;
-  }
-
-  // Find the highest-severity tier that has variants (dynamic top tier)
-  let dynamicTopTier: TierName | null = null;
-  for (const tier of tierOrder) {
-    if (tier !== 'selected' && consequenceTiers[tier].length > 0) {
-      dynamicTopTier = tier;
-      break;
-    }
-  }
-
-  // Mark expanded status for the dynamic top tier
-  if (dynamicTopTier) {
-    for (const lollipop of consequenceTiers[dynamicTopTier]) {
-      lollipop.isExpanded = true;
-    }
-  }
-
-  // Collect selected lollipops BEFORE running spread layout
-  const selectedLollipops: LollipopData[] = lollipops.filter(l => l.isSelected);
-
-  // Run spread layout on the dynamic top tier, EXCLUDING selected variants
-  // Selected variants will get their own layout
-  if (dynamicTopTier && consequenceTiers[dynamicTopTier].length > 0) {
-    const nonSelectedInTopTier = consequenceTiers[dynamicTopTier].filter(l => !l.isSelected);
-    if (nonSelectedInTopTier.length > 0) {
-      runTopTierForceLayout(nonSelectedInTopTier, width, params);
-    }
-  }
-
-  // Apply opportunistic horizontal labels to lower tiers
-  for (const tier of tierOrder) {
-    if (tier !== 'selected' && tier !== dynamicTopTier && consequenceTiers[tier].length > 0) {
-      resolveHorizontalLabels(consequenceTiers[tier], width);
-    }
-  }
-
-  // Second pass: layout selected variants in their dedicated tier
-  // Pull X positions toward anchorX (their actual genomic position)
-  if (selectedLollipops.length > 0) {
-    for (const lollipop of selectedLollipops) {
+    // If selected and selection layer exists, reassign to selection layer
+    if (isSelected && hasSelectedVariants) {
+      lollipop.layerId = 'selected';
       lollipop.tier = 'selected';
-      lollipop.y = tierY.selected;
-      lollipop.isExpanded = true;
+      const selectionLayer = layerConfig.find(l => l.id === 'selected');
+      if (selectionLayer) {
+        lollipop.y = selectionLayer.y;
+        lollipop.isExpanded = selectionLayer.layout === 'expanded';
+      }
     }
-    // Run dedicated layout for selected tier, pulling toward anchorX
-    runSelectedTierLayout(selectedLollipops, width, params);
+
+    // Add to appropriate layer group
+    const group = layerGroups.get(lollipop.layerId);
+    if (group) {
+      group.push(lollipop);
+    } else {
+      // Fallback: put in the last layer
+      const lastLayer = layerConfig[layerConfig.length - 1];
+      layerGroups.get(lastLayer.id)?.push(lollipop);
+    }
   }
 
-  // Third pass: avoid collisions between selected stems and LoF tier discs/labels
-  // Shift LoF variants toward their anchor to make room for selected stems
-  if (selectedLollipops.length > 0 && dynamicTopTier === 'lof') {
-    const lofLollipops = lollipops.filter(l => !l.isSelected && l.tier === 'lof');
-    avoidStemCollisions(selectedLollipops, lofLollipops, tierY, height);
+  // Find the first non-selection expanded layer (for collision avoidance)
+  const firstExpandedLayer = layerConfig.find(l => l.id !== 'selected' && l.layout === 'expanded');
+
+  // Layout each layer
+  for (const layer of layerConfig) {
+    const items = layerGroups.get(layer.id) || [];
+    if (items.length === 0) continue;
+
+    // Set Y position from layer config
+    for (const item of items) {
+      item.y = layer.y;
+      item.isExpanded = layer.layout === 'expanded';
+      item.isTopTier = item.isExpanded;  // Backward compatibility
+    }
+
+    if (layer.layout === 'expanded') {
+      if (layer.id === 'selected') {
+        // Use dedicated selected tier layout (pulls toward anchor)
+        runSelectedTierLayout(items, width, params);
+      } else {
+        // Use force layout for expanded layers
+        // Exclude selected variants if they were reassigned
+        const nonSelected = items.filter(l => !l.isSelected);
+        if (nonSelected.length > 0) {
+          runExpandedLayout(nonSelected, width, params);
+        }
+      }
+      // Resolve label collisions for expanded layers
+      resolveLabelCollisions(items, width);
+    } else {
+      // Condensed layout: x stays at anchorX
+      for (const item of items) {
+        item.x = item.anchorX;
+      }
+      // Apply opportunistic horizontal labels
+      resolveHorizontalLabels(items, width);
+    }
   }
 
-  // Mark isTopTier for backward compatibility
-  for (const lollipop of lollipops) {
-    lollipop.isTopTier = lollipop.isExpanded;
+  // Cross-layer collision avoidance: selected stems vs first expanded layer
+  if (hasSelectedVariants && firstExpandedLayer) {
+    const selectedItems = layerGroups.get('selected') || [];
+    const expandedItems = layerGroups.get(firstExpandedLayer.id) || [];
+    const nonSelectedExpanded = expandedItems.filter(l => !l.isSelected);
+
+    if (selectedItems.length > 0 && nonSelectedExpanded.length > 0) {
+      const tierY = getTierPositions(height);
+      avoidStemCollisions(selectedItems, nonSelectedExpanded, tierY, height);
+    }
+  }
+}
+
+/**
+ * Generic expanded layout - replaces runTopTierForceLayout
+ * Spreads lollipops evenly across available width
+ */
+function runExpandedLayout(
+  items: LollipopData[],
+  width: number,
+  params: LayoutParams
+): void {
+  if (items.length === 0) return;
+
+  // Sort by anchor position for genomic order
+  items.sort((a, b) => a.anchorX - b.anchorX);
+
+  const margin = 40;
+  const availableWidth = width - 2 * margin;
+  const spacing = items.length > 1 ? availableWidth / (items.length - 1) : 0;
+
+  for (let i = 0; i < items.length; i++) {
+    items[i].x = margin + i * spacing;
+    items[i].showLabel = false;
   }
 
-  // Resolve labels for selected tier
-  if (selectedLollipops.length > 0) {
-    resolveLabelCollisions(selectedLollipops, width);
-  }
+  resolveLabelCollisions(items, width);
 }
 
 /**
@@ -536,37 +660,6 @@ function resolveHorizontalLabels(
       rightBoundary = Math.max(rightBoundary, lollipop.anchorX + lollipop.radius);
     }
   }
-}
-
-/**
- * Layout for top tier: spread lollipops evenly, then resolve label overlaps
- * This creates the characteristic "fanned out" look with crank stems
- */
-function runTopTierForceLayout(
-  topTier: LollipopData[],
-  width: number,
-  params: LayoutParams
-): void {
-  if (topTier.length === 0) return;
-
-  // Sort by anchor position so they spread in genomic order
-  topTier.sort((a, b) => a.anchorX - b.anchorX);
-
-  const margin = 40;
-  const availableWidth = width - 2 * margin;
-
-  // Spread lollipops evenly across the width
-  // This creates the fanned-out crank stem appearance
-  const spacing = topTier.length > 1 ? availableWidth / (topTier.length - 1) : 0;
-
-  for (let i = 0; i < topTier.length; i++) {
-    topTier[i].x = margin + i * spacing;
-    topTier[i].y = params.topTierY;
-    topTier[i].showLabel = false;
-  }
-
-  // Resolve label collisions - show labels only where they fit
-  resolveLabelCollisions(topTier, width);
 }
 
 /**

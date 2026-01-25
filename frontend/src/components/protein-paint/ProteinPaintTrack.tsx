@@ -12,8 +12,15 @@
 
 import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import type { Variant, Exon } from '../../api/types';
-import type { LollipopData } from './types';
-import { getLayoutParams, createLollipops, layoutLollipops, getTierPositions } from './utils';
+import type { LollipopData, LayerDefinition } from './types';
+import {
+  getLayoutParams,
+  createLollipops,
+  layoutLollipops,
+  getStandardLayers,
+  createSelectionLayer,
+  getTierPositions,
+} from './utils';
 import { getVariantPosition, isInExonRegion } from '../variantUtils';
 
 interface ProteinPaintTrackProps {
@@ -28,6 +35,8 @@ interface ProteinPaintTrackProps {
   selectedIds?: Set<string>;
   /** Callback when a variant is clicked (toggles selection) */
   onVariantClick?: (variantId: string) => void;
+  /** Custom layer configuration (optional, uses standard gnomAD layers if not provided) */
+  customLayers?: LayerDefinition[];
 }
 
 export function ProteinPaintTrack({
@@ -40,6 +49,7 @@ export function ProteinPaintTrack({
   onHover,
   selectedIds,
   onVariantClick,
+  customLayers,
 }: ProteinPaintTrackProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,14 +66,30 @@ export function ProteinPaintTrack({
     return variants.filter((v) => isInExonRegion(getVariantPosition(v), exons));
   }, [variants, exons, showIntrons]);
 
-  // Create and layout lollipops
+  // Memoize layer configuration
+  const layers = useMemo(() => {
+    const baseLayers = customLayers || getStandardLayers(height);
+
+    // If there are selected variants, prepend selection layer
+    if (selectedIds && selectedIds.size > 0) {
+      const selectionLayer = createSelectionLayer(selectedIds);
+      // Only prepend if not already in custom layers
+      if (!baseLayers.find(l => l.id === 'selected')) {
+        return [selectionLayer, ...baseLayers];
+      }
+    }
+
+    return baseLayers;
+  }, [height, customLayers, selectedIds]);
+
+  // Create and layout lollipops using layer configuration
   const lollipops = useMemo(() => {
     const params = getLayoutParams(height);
     params.selectedIds = selectedIds;
-    const data = createLollipops(filteredVariants, scale, params);
-    layoutLollipops(data, width, params);
+    const data = createLollipops(filteredVariants, scale, params, layers);
+    layoutLollipops(data, width, params, layers);
     return data;
-  }, [filteredVariants, scale, width, height, selectedIds]);
+  }, [filteredVariants, scale, width, height, selectedIds, layers]);
 
   // Store for hit detection
   lollipopsRef.current = lollipops;
@@ -94,9 +120,9 @@ export function ProteinPaintTrack({
     // Get tier positions for layer-aware crank stems
     const tierPositions = getTierPositions(height);
 
-    // Group expanded tiers by tier name for calculating knee positions
-    const selectedTier = expandedTiers.filter(l => l.tier === 'selected');
-    const lofTier = expandedTiers.filter(l => l.tier === 'lof');
+    // Group expanded tiers by layerId for calculating knee positions
+    const selectedTier = expandedTiers.filter(l => l.layerId === 'selected');
+    const lofTier = expandedTiers.filter(l => l.layerId === 'lof');
 
     // Calculate bottom of each expanded tier for crank positioning
     const selectedTierBottom = selectedTier.length > 0
@@ -178,8 +204,8 @@ export function ProteinPaintTrack({
       let upperKnee: number;
       let lowerKnee: number;
 
-      if (lollipop.tier === 'selected') {
-        // Selected tier: keep stem VERTICAL through LoF tier region to avoid collisions
+      if (lollipop.layerId === 'selected') {
+        // Selected layer: keep stem VERTICAL through LoF tier region to avoid collisions
         // Upper knee is BELOW the LoF tier (after passing through it vertically)
         // This ensures selected stems don't cross LoF tier labels
         const lofLowerKnee = lofTierBottom < missenseTop
@@ -188,7 +214,7 @@ export function ProteinPaintTrack({
         upperKnee = lofLowerKnee;  // Start diagonal BELOW LoF tier
         lowerKnee = lofLowerKnee + 20;  // Short diagonal segment
       } else {
-        // LoF tier: crank above missense
+        // Other expanded layers (e.g., LoF): crank above missense
         upperKnee = lofTierBottom;
         lowerKnee = upperKnee < missenseTop
           ? Math.min(upperKnee + 15, missenseTop)
@@ -206,8 +232,8 @@ export function ProteinPaintTrack({
       ctx.lineTo(lollipop.anchorX, baselineY);
       ctx.stroke();
 
-      // Find next lollipop in same tier to check horizontal space for secondary labels
-      const sameTier = expandedTiers.filter(l => l.tier === lollipop.tier);
+      // Find next lollipop in same layer to check horizontal space for secondary labels
+      const sameTier = expandedTiers.filter(l => l.layerId === lollipop.layerId);
       const tierIndex = sameTier.indexOf(lollipop);
       const nextLollipop = tierIndex < sameTier.length - 1 ? sameTier[tierIndex + 1] : null;
       const spaceToNext = nextLollipop

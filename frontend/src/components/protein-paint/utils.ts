@@ -247,6 +247,18 @@ function getTier(priority: number): 'lof' | 'missense' | 'synonymous' | 'noncodi
 }
 
 /**
+ * Get tier Y positions for a given height
+ */
+export function getTierPositions(height: number): Record<string, number> {
+  return {
+    lof: 60,                    // Top - LoF with labels (raised higher)
+    missense: height * 0.55,    // Upper middle (pushed down for crank room)
+    synonymous: height * 0.72,  // Lower middle
+    noncoding: height * 0.85,   // Near bottom (above gene)
+  };
+}
+
+/**
  * Assign lollipops to tiers based on consequence
  */
 export function layoutLollipops(
@@ -257,14 +269,7 @@ export function layoutLollipops(
   if (lollipops.length === 0) return;
 
   const height = params.bottomTierY + 15; // Approximate total height
-
-  // Define Y positions for each tier
-  const tierY = {
-    lof: 80,                    // Top - LoF with labels
-    missense: height * 0.45,    // Upper middle
-    synonymous: height * 0.65,  // Lower middle
-    noncoding: height * 0.82,   // Near bottom (above gene)
-  };
+  const tierY = getTierPositions(height);
 
   // Group by tier
   const tiers: Record<string, LollipopData[]> = {

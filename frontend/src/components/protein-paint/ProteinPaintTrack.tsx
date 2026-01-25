@@ -13,7 +13,7 @@
 import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import type { Variant, Exon } from '../../api/types';
 import type { LollipopData } from './types';
-import { getLayoutParams, createLollipops, layoutLollipops } from './utils';
+import { getLayoutParams, createLollipops, layoutLollipops, getTierPositions } from './utils';
 import { getVariantPosition, isInExonRegion } from '../variantUtils';
 
 interface ProteinPaintTrackProps {
@@ -84,10 +84,17 @@ export function ProteinPaintTrack({
     const lofTier = lollipops.filter(l => l.isTopTier);
     const otherTiers = lollipops.filter(l => !l.isTopTier);
 
+    // Get tier positions for layer-aware crank stems
+    const tierPositions = getTierPositions(height);
+
     // Calculate the bottom of all LoF disc stacks to ensure stems don't cross over discs
     const lofTierBottom = lofTier.length > 0
-      ? Math.max(...lofTier.map(l => l.y + l.stackHeight)) + 8  // 8px gap below lowest stack
+      ? Math.max(...lofTier.map(l => l.y + l.stackHeight)) + 3  // Small gap below lowest stack
       : 0;
+
+    // The lower knee of the crank must be ABOVE the missense layer
+    // This ensures the diagonal happens in the gap between LoF and missense
+    const missenseTop = tierPositions.missense - 20;  // More margin above missense discs
 
     // Draw non-LoF tiers first (simple straight stems with stacked discs)
     for (const lollipop of otherTiers) {
@@ -143,23 +150,27 @@ export function ProteinPaintTrack({
 
       // Draw stem with crank/dog-leg style:
       // Upper vertical -> Diagonal -> Lower vertical
-      // The diagonal starts below ALL disc stacks to prevent overlapping
+      // The diagonal happens in the gap between LoF and missense tiers
       ctx.strokeStyle = '#999';
       ctx.lineWidth = 1;
       ctx.beginPath();
 
-      // Calculate crank segments
-      const elbowTop = lofTierBottom;  // Start diagonal below all stacks
-      const elbowBottom = Math.min(elbowTop + 25, baselineY - 5);  // Diagonal spans ~25px
+      // Calculate crank segments - keep diagonal tight and high
+      const upperKnee = lofTierBottom;
+      // Lower knee should be below upper knee AND above missense
+      // Keep diagonal short (15px) to stay high on the canvas
+      const lowerKnee = upperKnee < missenseTop
+        ? Math.min(upperKnee + 15, missenseTop)  // Normal case: short diagonal in gap
+        : upperKnee + 8;  // Tight case: minimal diagonal
 
-      // Upper vertical: from stack bottom down to tier bottom
+      // Upper vertical: from stack bottom down to upper knee
       ctx.moveTo(x, stackBottom);
-      ctx.lineTo(x, elbowTop);
+      ctx.lineTo(x, upperKnee);
 
-      // Diagonal: from upper elbow to lower elbow (moving toward anchor)
-      ctx.lineTo(lollipop.anchorX, elbowBottom);
+      // Diagonal: from upper knee to lower knee (moving toward anchor)
+      ctx.lineTo(lollipop.anchorX, lowerKnee);
 
-      // Lower vertical: from lower elbow to baseline
+      // Lower vertical: from lower knee to baseline
       ctx.lineTo(lollipop.anchorX, baselineY);
       ctx.stroke();
 

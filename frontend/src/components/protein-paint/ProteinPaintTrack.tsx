@@ -84,59 +84,77 @@ export function ProteinPaintTrack({
     const lofTier = lollipops.filter(l => l.isTopTier);
     const otherTiers = lollipops.filter(l => !l.isTopTier);
 
-    // Draw non-LoF tiers first (simple straight stems)
+    // Calculate the bottom of all LoF disc stacks to ensure stems don't cross over discs
+    const lofTierBottom = lofTier.length > 0
+      ? Math.max(...lofTier.map(l => l.y + l.stackHeight)) + 8  // 8px gap below lowest stack
+      : 0;
+
+    // Draw non-LoF tiers first (simple straight stems with stacked discs)
     for (const lollipop of otherTiers) {
       const isHovered = lollipop.id === hoveredId;
+      const x = lollipop.anchorX;
 
-      // Draw straight stem
+      // Calculate stack bottom (where stem ends)
+      const stackBottom = lollipop.y + lollipop.stackHeight;
+
+      // Draw straight stem to bottom of stack
       ctx.strokeStyle = '#ccc';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(lollipop.anchorX, baselineY);
-      ctx.lineTo(lollipop.anchorX, lollipop.y);
+      ctx.moveTo(x, baselineY);
+      ctx.lineTo(x, stackBottom);
       ctx.stroke();
 
-      // Draw disc
-      ctx.beginPath();
-      ctx.fillStyle = lollipop.color;
-      ctx.globalAlpha = isHovered ? 1 : 0.7;
-      ctx.arc(lollipop.anchorX, lollipop.y, lollipop.radius, 0, Math.PI * 2);
-      ctx.fill();
+      // Draw stacked discs (top to bottom)
+      for (const disc of lollipop.discs) {
+        const discY = lollipop.y + disc.stackY + disc.radius;  // Center Y of this disc
 
-      // Border
-      ctx.strokeStyle = isHovered ? '#000' : 'rgba(0,0,0,0.15)';
-      ctx.lineWidth = isHovered ? 2 : 1;
-      ctx.stroke();
+        ctx.beginPath();
+        ctx.fillStyle = disc.color;
+        ctx.globalAlpha = isHovered ? 1 : 0.7;
+        ctx.arc(x, discY, disc.radius, 0, Math.PI * 2);
+        ctx.fill();
 
-      // Show label on hover only
+        // Border
+        ctx.strokeStyle = isHovered ? '#000' : 'rgba(0,0,0,0.15)';
+        ctx.lineWidth = isHovered ? 2 : 1;
+        ctx.stroke();
+      }
+
+      // Show label on hover only (show top disc's label)
       if (isHovered && lollipop.label) {
         ctx.globalAlpha = 1;
         ctx.fillStyle = '#333';
         ctx.font = 'bold 10px sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(lollipop.label, lollipop.anchorX + lollipop.radius + 3, lollipop.y);
+        const topDiscY = lollipop.y + lollipop.discs[0].radius;
+        ctx.fillText(lollipop.label, x + lollipop.radius + 3, topDiscY);
       }
     }
 
-    // Draw LoF tier (crank/dog-leg stems with labels)
+    // Draw LoF tier (crank/dog-leg stems with stacked discs and labels)
     for (const lollipop of lofTier) {
       const isHovered = lollipop.id === hoveredId;
+      const x = lollipop.x;
+
+      // Calculate stack bottom
+      const stackBottom = lollipop.y + lollipop.stackHeight;
 
       // Draw stem with crank/dog-leg style:
       // Upper vertical -> Diagonal -> Lower vertical
+      // The diagonal starts below ALL disc stacks to prevent overlapping
       ctx.strokeStyle = '#999';
       ctx.lineWidth = 1;
       ctx.beginPath();
 
       // Calculate crank segments
-      const bottomOfDisc = lollipop.y + lollipop.radius;
-      const elbowTop = bottomOfDisc + 12;  // Upper vertical drops 12px below disc
-      const elbowBottom = Math.min(elbowTop + 25, baselineY - 5);  // Diagonal spans ~25px, but don't exceed baseline
+      const elbowTop = lofTierBottom;  // Start diagonal below all stacks
+      const elbowBottom = Math.min(elbowTop + 25, baselineY - 5);  // Diagonal spans ~25px
 
-      // Upper vertical: from disc bottom down
-      ctx.moveTo(lollipop.x, bottomOfDisc);
-      ctx.lineTo(lollipop.x, elbowTop);
+      // Upper vertical: from stack bottom down to tier bottom
+      ctx.moveTo(x, stackBottom);
+      ctx.lineTo(x, elbowTop);
 
       // Diagonal: from upper elbow to lower elbow (moving toward anchor)
       ctx.lineTo(lollipop.anchorX, elbowBottom);
@@ -145,26 +163,31 @@ export function ProteinPaintTrack({
       ctx.lineTo(lollipop.anchorX, baselineY);
       ctx.stroke();
 
-      // Draw disc
-      ctx.beginPath();
-      ctx.fillStyle = lollipop.color;
-      ctx.globalAlpha = isHovered ? 1 : 0.9;
-      ctx.arc(lollipop.x, lollipop.y, lollipop.radius, 0, Math.PI * 2);
-      ctx.fill();
+      // Draw stacked discs (top to bottom)
+      for (const disc of lollipop.discs) {
+        const discY = lollipop.y + disc.stackY + disc.radius;  // Center Y of this disc
 
-      // Border
-      ctx.strokeStyle = isHovered ? '#000' : 'rgba(0,0,0,0.3)';
-      ctx.lineWidth = isHovered ? 2 : 1;
-      ctx.stroke();
+        ctx.beginPath();
+        ctx.fillStyle = disc.color;
+        ctx.globalAlpha = isHovered ? 1 : 0.9;
+        ctx.arc(x, discY, disc.radius, 0, Math.PI * 2);
+        ctx.fill();
 
-      // Draw label (always shown for LoF)
-      if (lollipop.label) {
+        // Border
+        ctx.strokeStyle = isHovered ? '#000' : 'rgba(0,0,0,0.3)';
+        ctx.lineWidth = isHovered ? 2 : 1;
+        ctx.stroke();
+      }
+
+      // Draw label (only when showLabel is true, or on hover) - show top disc's label
+      if (lollipop.label && (lollipop.showLabel || isHovered)) {
         ctx.globalAlpha = 1;
         ctx.fillStyle = lollipop.color;
         ctx.font = 'bold 10px sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(lollipop.label, lollipop.x + lollipop.radius + 3, lollipop.y);
+        const topDiscY = lollipop.y + lollipop.discs[0].radius;
+        ctx.fillText(lollipop.label, x + lollipop.radius + 3, topDiscY);
       }
     }
 
@@ -180,22 +203,30 @@ export function ProteinPaintTrack({
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
-      // Find closest lollipop
-      let closest: { lollipop: LollipopData; distance: number } | null = null;
+      // Find closest lollipop (check all discs in stack)
+      let closest: { lollipop: LollipopData; discIndex: number; distance: number } | null = null;
 
       for (const lollipop of lollipopsRef.current) {
         const lx = lollipop.isTopTier ? lollipop.x : lollipop.anchorX;
-        const distance = Math.sqrt((lx - mouseX) ** 2 + (lollipop.y - mouseY) ** 2);
-        const hitRadius = lollipop.radius + 5;
 
-        if (distance < hitRadius && (!closest || distance < closest.distance)) {
-          closest = { lollipop, distance };
+        // Check each disc in the stack
+        for (let i = 0; i < lollipop.discs.length; i++) {
+          const disc = lollipop.discs[i];
+          const discY = lollipop.y + disc.stackY + disc.radius;
+          const distance = Math.sqrt((lx - mouseX) ** 2 + (discY - mouseY) ** 2);
+          const hitRadius = disc.radius + 5;
+
+          if (distance < hitRadius && (!closest || distance < closest.distance)) {
+            closest = { lollipop, discIndex: i, distance };
+          }
         }
       }
 
       if (closest) {
         setHoveredId(closest.lollipop.id);
-        onHover?.(closest.lollipop.variants[0], mouseX, mouseY);
+        // Return the first variant from the hovered disc
+        const hoveredDisc = closest.lollipop.discs[closest.discIndex];
+        onHover?.(hoveredDisc.variants[0], mouseX, mouseY);
       } else {
         setHoveredId(null);
         onHover?.(null, mouseX, mouseY);

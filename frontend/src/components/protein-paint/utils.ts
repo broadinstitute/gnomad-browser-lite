@@ -12,7 +12,7 @@
 
 import { forceSimulation, forceX, forceCollide } from 'd3-force';
 import type { Variant } from '../../api/types';
-import type { LollipopData, LayoutParams } from './types';
+import type { LollipopData, LayoutParams, StackedDisc } from './types';
 import {
   getVariantPosition,
   getVariantColor,
@@ -111,75 +111,123 @@ function estimateLabelWidth(label: string): number {
 }
 
 /**
- * Create lollipop data from variants, grouped by hgvsp
+ * Create lollipop data from variants, grouped by position with stacked discs
+ * Multi-allelic variants (different amino acid changes at same position) stack vertically
  */
 export function createLollipops(
   variants: Variant[],
   scale: (pos: number) => number,
   params: LayoutParams
 ): LollipopData[] {
-  // Group variants by position + hgvsp
-  const groupMap = new Map<string, { pos: number; hgvsp: string; variants: Variant[] }>();
+  // First, group variants by position
+  const positionMap = new Map<number, Variant[]>();
 
   for (const variant of variants) {
     const pos = getVariantPosition(variant);
-    const hgvsp = variant.hgvsp || 'unknown';
-    const key = `${pos}-${hgvsp}`;
-
-    if (!groupMap.has(key)) {
-      groupMap.set(key, { pos, hgvsp, variants: [] });
+    if (!positionMap.has(pos)) {
+      positionMap.set(pos, []);
     }
-    groupMap.get(key)!.variants.push(variant);
+    positionMap.get(pos)!.push(variant);
   }
 
-  // Find max count for radius scaling
+  // Find max count across all hgvsp groups for radius scaling
   let maxCount = 1;
-  for (const group of groupMap.values()) {
-    maxCount = Math.max(maxCount, group.variants.length);
+  for (const posVariants of positionMap.values()) {
+    // Group by hgvsp within this position
+    const hgvspCounts = new Map<string, number>();
+    for (const v of posVariants) {
+      const hgvsp = v.hgvsp || 'unknown';
+      hgvspCounts.set(hgvsp, (hgvspCounts.get(hgvsp) || 0) + 1);
+    }
+    for (const count of hgvspCounts.values()) {
+      maxCount = Math.max(maxCount, count);
+    }
   }
 
-  // Create lollipop data
+  // Create lollipop data with stacked discs
   const lollipops: LollipopData[] = [];
 
-  for (const [key, group] of groupMap) {
-    const { pos, hgvsp, variants: groupVariants } = group;
-    const count = groupVariants.length;
-    const label = parseHgvspLabel(hgvsp);
-
-    // Determine color and priority from highest-priority variant
-    // Also sum up allele counts across all variants in this group
-    let color = '#757575';
-    let priority = 0;
-    let totalAC = 0;
-    for (const v of groupVariants) {
-      const p = getConsequencePriority(v.consequence || '');
-      if (p > priority) {
-        priority = p;
-        color = getVariantColor(v);
+  for (const [pos, posVariants] of positionMap) {
+    // Group variants by hgvsp at this position
+    const hgvspMap = new Map<string, Variant[]>();
+    for (const v of posVariants) {
+      const hgvsp = v.hgvsp || 'unknown';
+      if (!hgvspMap.has(hgvsp)) {
+        hgvspMap.set(hgvsp, []);
       }
-      // Sum allele count (AC) - the actual observation count in population
-      totalAC += v.ac || 0;
+      hgvspMap.get(hgvsp)!.push(v);
     }
 
-    // Priority: consequence class * 1000 + allele count
-    // This prioritizes LoF first, then by how common the variant is
-    const effectivePriority = priority * 1000 + Math.min(totalAC, 500);
+    // Create a disc for each unique hgvsp
+    const discs: StackedDisc[] = [];
+    for (const [hgvsp, hgvspVariants] of hgvspMap) {
+      const count = hgvspVariants.length;
+      const label = parseHgvspLabel(hgvsp);
+
+      // Determine color and priority from highest-priority variant in this group
+      let color = '#757575';
+      let priority = 0;
+      let totalAC = 0;
+      for (const v of hgvspVariants) {
+        const p = getConsequencePriority(v.consequence || '');
+        if (p > priority) {
+          priority = p;
+          color = getVariantColor(v);
+        }
+        totalAC += v.ac || 0;
+      }
+
+      // Priority: consequence class * 1000 + allele count
+      const effectivePriority = priority * 1000 + Math.min(totalAC, 500);
+
+      discs.push({
+        hgvsp,
+        label,
+        variants: hgvspVariants,
+        count,
+        radius: calculateDiscRadius(count, maxCount, params),
+        color,
+        priority: effectivePriority,
+        stackY: 0,  // Will be calculated after sorting
+      });
+    }
+
+    // Sort discs by priority (highest priority on top = first in array)
+    discs.sort((a, b) => b.priority - a.priority);
+
+    // Calculate stack positions (Y offset from top)
+    let stackY = 0;
+    const discSpacing = 2;  // Gap between stacked discs
+    for (const disc of discs) {
+      disc.stackY = stackY;
+      stackY += disc.radius * 2 + discSpacing;
+    }
+    const stackHeight = stackY - discSpacing;  // Remove last spacing
+
+    // Get properties from the top (highest priority) disc
+    const topDisc = discs[0];
+    const maxRadius = Math.max(...discs.map(d => d.radius));
+
+    // Collect all variants at this position
+    const allVariants = posVariants;
 
     lollipops.push({
-      id: key,
+      id: `pos-${pos}`,
       pos,
-      hgvsp,
-      label,
-      variants: groupVariants,
-      count,
-      radius: calculateDiscRadius(count, maxCount, params),
-      color,
-      priority: effectivePriority,
+      discs,
+      label: topDisc.label,
+      variants: allVariants,
+      count: allVariants.length,
+      radius: maxRadius,
+      color: topDisc.color,
+      priority: topDisc.priority,
       anchorX: scale(pos),
       x: scale(pos),
       y: params.bottomTierY,
-      labelWidth: estimateLabelWidth(label),
+      stackHeight,
+      labelWidth: estimateLabelWidth(topDisc.label),
       isTopTier: false,
+      showLabel: false,
     });
   }
 
@@ -241,23 +289,80 @@ export function layoutLollipops(
 
 /**
  * Force layout for top tier that accounts for label width
+ * If labels don't fit, switches to circle-only mode with collision layout
  */
 function runTopTierForceLayout(
   topTier: LollipopData[],
   width: number,
   params: LayoutParams
 ): void {
+  if (topTier.length === 0) return;
+
   // Sort by anchor position so they spread in order
   topTier.sort((a, b) => a.anchorX - b.anchorX);
 
-  // Simple approach: spread evenly across the width
-  const margin = 60;
-  const availableWidth = width - 2 * margin;
-  const spacing = topTier.length > 1 ? availableWidth / (topTier.length - 1) : 0;
+  // Calculate total width needed for labels (disc + label + padding)
+  const labelPadding = 8;  // Space between label end and next disc
+  const totalLabelWidth = topTier.reduce(
+    (sum, l) => sum + l.radius * 2 + l.labelWidth + labelPadding,
+    0
+  );
 
-  for (let i = 0; i < topTier.length; i++) {
-    topTier[i].x = margin + i * spacing;
-    topTier[i].y = params.topTierY;
+  const margin = 40;
+  const availableWidth = width - 2 * margin;
+
+  // Check if labels fit
+  const labelsWillFit = totalLabelWidth <= availableWidth;
+
+  if (labelsWillFit) {
+    // Labels fit: spread evenly and show labels
+    const spacing = topTier.length > 1 ? availableWidth / (topTier.length - 1) : 0;
+
+    for (let i = 0; i < topTier.length; i++) {
+      topTier[i].x = margin + i * spacing;
+      topTier[i].y = params.topTierY;
+      topTier[i].showLabel = true;
+    }
+  } else {
+    // Labels don't fit: use collision layout, circles only
+    runCollisionLayout(topTier, width, params);
+  }
+}
+
+/**
+ * Collision-based layout that keeps discs close to their genomic anchors
+ * Used when there are too many variants to show labels
+ */
+function runCollisionLayout(
+  topTier: LollipopData[],
+  width: number,
+  params: LayoutParams
+): void {
+  const margin = 20;
+  const padding = 3;  // Minimum gap between discs
+
+  // Initialize positions at anchor
+  for (const l of topTier) {
+    l.x = l.anchorX;
+    l.y = params.topTierY;
+    l.showLabel = false;
+  }
+
+  // Use d3-force for collision detection (use max radius for collision)
+  const simulation = forceSimulation(topTier as any)
+    .force('x', forceX((d: any) => d.anchorX).strength(0.8))
+    .force('collide', forceCollide((d: any) => (d.radius || 5) + padding).strength(1))
+    .stop();
+
+  // Run simulation synchronously
+  for (let i = 0; i < 120; i++) {
+    simulation.tick();
+  }
+
+  // Clamp to bounds
+  for (const l of topTier) {
+    l.x = Math.max(margin + l.radius, Math.min(width - margin - l.radius, l.x));
+    l.y = params.topTierY;  // Keep Y fixed
   }
 }
 

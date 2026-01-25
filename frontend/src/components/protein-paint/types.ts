@@ -13,15 +13,9 @@
 import type { Variant } from '../../api/types';
 
 /**
- * A single lollipop representing one amino acid change
+ * A disc representing one amino acid change (used in stacks)
  */
-export interface LollipopData {
-  /** Unique identifier */
-  id: string;
-
-  /** Genomic position */
-  pos: number;
-
+export interface StackedDisc {
   /** The protein change notation (e.g., "p.Val600Glu") */
   hgvsp: string;
 
@@ -40,7 +34,42 @@ export interface LollipopData {
   /** Color based on consequence */
   color: string;
 
-  /** Priority score (higher = more important, shown in top tier) */
+  /** Priority score for this disc */
+  priority: number;
+
+  /** Y offset within the stack (0 for bottom disc) */
+  stackY: number;
+}
+
+/**
+ * A lollipop/skewer at a genomic position, may contain stacked discs
+ */
+export interface LollipopData {
+  /** Unique identifier */
+  id: string;
+
+  /** Genomic position */
+  pos: number;
+
+  /** Stacked discs at this position (sorted by priority, highest on top) */
+  discs: StackedDisc[];
+
+  /** Primary label (from top disc) */
+  label: string;
+
+  /** All variants at this position */
+  variants: Variant[];
+
+  /** Total count of all variants at this position */
+  count: number;
+
+  /** Radius of the largest disc (for collision) */
+  radius: number;
+
+  /** Color of the highest-priority disc */
+  color: string;
+
+  /** Highest priority score among discs */
   priority: number;
 
   /** Anchor x position (true genomic position in pixels) */
@@ -49,14 +78,20 @@ export interface LollipopData {
   /** Display x position (for top tier, after force layout) */
   x: number;
 
-  /** Display y position */
+  /** Display y position (top of the stack) */
   y: number;
+
+  /** Total height of the disc stack */
+  stackHeight: number;
 
   /** Label width in pixels (for force layout collision) */
   labelWidth: number;
 
   /** Whether this is in the top (priority) tier */
   isTopTier: boolean;
+
+  /** Whether to show the label (false when too dense) */
+  showLabel: boolean;
 }
 
 /**

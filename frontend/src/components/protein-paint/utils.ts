@@ -10,7 +10,6 @@
  * attribution per academic conventions.
  */
 
-import { forceSimulation, forceX, forceCollide } from 'd3-force';
 import type { Variant } from '../../api/types';
 import type { LollipopData, LayoutParams, StackedDisc, TierName, TierConfig, LayerDefinition } from './types';
 import {
@@ -520,14 +519,13 @@ export function layoutLollipops(
 
     if (shouldBeExpanded) {
       if (layer.id === 'selected') {
-        // Selection layer: stay near anchor, crankshaft only when needed for collision avoidance
-        runSelectedTierLayout(items, width, params);
+        // Selection layer: cluster nearby variants, spread evenly within clusters
+        runClusteredLayout(items, width, params);
       } else {
-        // Use force layout for expanded layers
-        // Exclude selected variants if they were reassigned
+        // Dynamic top layer: also use clustered layout for consistency
         const nonSelected = items.filter(l => !l.isSelected);
         if (nonSelected.length > 0) {
-          runExpandedLayout(nonSelected, width, params);
+          runClusteredLayout(nonSelected, width, params);
         }
       }
       // Resolve label collisions for expanded layers
@@ -556,82 +554,119 @@ export function layoutLollipops(
 }
 
 /**
- * Generic expanded layout - replaces runTopTierForceLayout
- * Spreads lollipops evenly across available width
- */
-function runExpandedLayout(
-  items: LollipopData[],
-  width: number,
-  params: LayoutParams
-): void {
-  if (items.length === 0) return;
-
-  // Sort by anchor position for genomic order
-  items.sort((a, b) => a.anchorX - b.anchorX);
-
-  const margin = 40;
-  const availableWidth = width - 2 * margin;
-  const spacing = items.length > 1 ? availableWidth / (items.length - 1) : 0;
-
-  for (let i = 0; i < items.length; i++) {
-    items[i].x = margin + i * spacing;
-    items[i].showLabel = false;
-  }
-
-  resolveLabelCollisions(items, width);
-}
-
-/**
- * Avoid collisions between selected tier stems and LoF tier discs/labels
- * Selected stems are now VERTICAL through the LoF tier (at selected.x),
- * so we just need to ensure LoF variants don't overlap with that vertical line
+ * Avoid collisions between selected tier stems and top tier discs/labels,
+ * and minimize diagonal stem line crossings between the two layers.
  */
 function avoidStemCollisions(
   selectedLollipops: LollipopData[],
-  lofLollipops: LollipopData[],
+  topLollipops: LollipopData[],
   _tierY: Record<string, number>,
   _height: number
 ): void {
-  if (selectedLollipops.length === 0 || lofLollipops.length === 0) return;
+  if (selectedLollipops.length === 0 || topLollipops.length === 0) return;
 
-  // Selected stems are now vertical through the LoF tier at selected.x
-  // We need to ensure LoF discs and labels don't overlap with these vertical lines
+  // Step 1: Minimize stem crossings by adjusting top layer positions
+  // Stems go from x (at disc) diagonally to anchorX (at baseline)
+  // Two stems cross if their x positions have opposite ordering from their anchors
+  minimizeStemCrossings(selectedLollipops, topLollipops);
+
+  // Step 2: Avoid disc/label collisions with vertical stem segments
   const stemClearance = 10;
-  const labelAngleAdjust = 1.1;  // Labels at -45° extend further than simple horizontal calc
+  const labelAngleAdjust = 1.1;
 
   for (const selected of selectedLollipops) {
-    // The stem is at selected.x through the LoF tier region
     const stemX = selected.x;
 
-    for (const lof of lofLollipops) {
-      // Calculate the full extent of this LoF variant (disc + angled label)
-      const labelExtent = lof.showLabel ? lof.labelWidth * labelAngleAdjust : 0;
-      const lofLeft = lof.x - lof.radius;
-      const lofRight = lof.x + lof.radius + labelExtent;
+    for (const top of topLollipops) {
+      const labelExtent = top.showLabel ? top.labelWidth * labelAngleAdjust : 0;
+      const topLeft = top.x - top.radius;
+      const topRight = top.x + top.radius + labelExtent;
 
-      // Check if stem passes through this LoF variant's zone
-      const hasCollision = stemX > lofLeft - stemClearance && stemX < lofRight + stemClearance;
+      const hasCollision = stemX > topLeft - stemClearance && stemX < topRight + stemClearance;
 
       if (hasCollision) {
-        // Collision detected! Shift LoF variant away from the stem
-        if (stemX <= lof.x) {
-          // Stem is to the left of disc center, shift LoF disc to the right
-          const shiftNeeded = stemX + stemClearance + lof.radius - lof.x + 5;
-          lof.x = lof.x + shiftNeeded;
+        if (stemX <= top.x) {
+          const shiftNeeded = stemX + stemClearance + top.radius - top.x + 5;
+          top.x = top.x + shiftNeeded;
         } else {
-          // Stem is to the right of disc center, shift LoF disc to the left
-          const shiftNeeded = lof.x + lof.radius + labelExtent + stemClearance - stemX + 5;
-          lof.x = lof.x - shiftNeeded;
+          const shiftNeeded = top.x + top.radius + labelExtent + stemClearance - stemX + 5;
+          top.x = top.x - shiftNeeded;
         }
       }
     }
   }
 
-  // After stem avoidance, resolve any disc-disc overlaps within LoF tier
-  resolveDiscOverlaps(lofLollipops);
+  // Step 3: Resolve any disc-disc overlaps within top tier
+  resolveDiscOverlaps(topLollipops);
 
-  // Re-resolve labels since positions changed
-  resolveLabelCollisions(lofLollipops, 2000);  // Use large width to not clip
+  // Step 4: Re-resolve labels since positions changed
+  resolveLabelCollisions(topLollipops, 2000);
+}
+
+/**
+ * Minimize stem crossings between two layers by adjusting x positions.
+ * A crossing occurs when two stems' x positions have opposite order from their anchors.
+ */
+function minimizeStemCrossings(
+  selectedLollipops: LollipopData[],
+  topLollipops: LollipopData[]
+): void {
+  // For each pair of (selected, top) lollipops with nearby anchors,
+  // check if their stems would cross and try to fix it
+
+  // Sort both by anchor position for easier comparison
+  const sortedSelected = [...selectedLollipops].sort((a, b) => a.anchorX - b.anchorX);
+  const sortedTop = [...topLollipops].sort((a, b) => a.anchorX - b.anchorX);
+
+  // Build a list of potential crossings
+  interface Crossing {
+    selected: LollipopData;
+    top: LollipopData;
+    anchorDiff: number;
+  }
+
+  const nearPairs: Crossing[] = [];
+  const anchorProximity = 50; // Consider stems "near" if anchors are within this distance
+
+  for (const sel of sortedSelected) {
+    for (const top of sortedTop) {
+      const anchorDiff = Math.abs(sel.anchorX - top.anchorX);
+      if (anchorDiff < anchorProximity) {
+        nearPairs.push({ selected: sel, top, anchorDiff });
+      }
+    }
+  }
+
+  // For nearby pairs, check if stems cross and try to align x positions
+  // to match anchor ordering (reduces visual crossing)
+  for (const pair of nearPairs) {
+    const sel = pair.selected;
+    const top = pair.top;
+
+    // Stems cross if: (sel.anchorX < top.anchorX) !== (sel.x < top.x)
+    const anchorOrder = sel.anchorX < top.anchorX;
+    const xOrder = sel.x < top.x;
+
+    if (anchorOrder !== xOrder) {
+      // Crossing detected! Try to nudge top layer to match anchor order
+      // Move top.x toward a position that matches the anchor relationship
+      const minSpacing = top.radius + top.labelWidth * 0.5 + 15;
+
+      if (anchorOrder) {
+        // sel anchor is left of top anchor, so sel.x should be left of top.x
+        // Nudge top.x to the right of sel.x
+        if (top.x < sel.x + minSpacing) {
+          top.x = sel.x + minSpacing;
+        }
+      } else {
+        // sel anchor is right of top anchor, so sel.x should be right of top.x
+        // Nudge top.x to the left of sel.x
+        if (top.x > sel.x - minSpacing) {
+          top.x = sel.x - minSpacing;
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -726,10 +761,10 @@ function resolveHorizontalLabels(
 }
 
 /**
- * Layout for selected tier: cluster nearby variants and spread evenly within each cluster
+ * Clustered layout for expanded layers: group nearby variants and spread evenly within each cluster
  * Uses crankshaft stems to connect spread positions back to genomic anchors
  */
-function runSelectedTierLayout(
+function runClusteredLayout(
   selectedTier: LollipopData[],
   width: number,
   _params: LayoutParams

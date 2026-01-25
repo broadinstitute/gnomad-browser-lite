@@ -520,7 +520,7 @@ export function layoutLollipops(
 
     if (shouldBeExpanded) {
       if (layer.id === 'selected') {
-        // Use dedicated selected tier layout (pulls toward anchor)
+        // Selection layer: stay near anchor, crankshaft only when needed for collision avoidance
         runSelectedTierLayout(items, width, params);
       } else {
         // Use force layout for expanded layers
@@ -726,8 +726,8 @@ function resolveHorizontalLabels(
 }
 
 /**
- * Layout for selected tier: pull variants toward their anchor position
- * Uses force simulation with strong pull to anchorX and collision avoidance
+ * Layout for selected tier: cluster nearby variants and spread evenly within each cluster
+ * Uses crankshaft stems to connect spread positions back to genomic anchors
  */
 function runSelectedTierLayout(
   selectedTier: LollipopData[],
@@ -736,7 +736,7 @@ function runSelectedTierLayout(
 ): void {
   if (selectedTier.length === 0) return;
 
-  // Initialize X to anchorX (Y is already set from tierY in layoutLollipops)
+  // Initialize
   for (const lollipop of selectedTier) {
     lollipop.x = lollipop.anchorX;
     lollipop.showLabel = false;
@@ -750,36 +750,115 @@ function runSelectedTierLayout(
   // Sort by anchor position
   selectedTier.sort((a, b) => a.anchorX - b.anchorX);
 
-  // Use force simulation to resolve overlaps while keeping close to anchor
-  interface SimNode {
-    x: number;
-    anchorX: number;
-    radius: number;
-    lollipop: LollipopData;
+  // Calculate minimum spacing needed for labels
+  const minSpacing = Math.max(
+    ...selectedTier.map(l => l.radius * 2 + l.labelWidth * 0.8 + 8)
+  );
+
+  // Cluster variants that are close together (within 2x minSpacing of each other)
+  const clusterThreshold = minSpacing * 2.5;
+  const clusters: LollipopData[][] = [];
+  let currentCluster: LollipopData[] = [selectedTier[0]];
+
+  for (let i = 1; i < selectedTier.length; i++) {
+    const prev = selectedTier[i - 1];
+    const curr = selectedTier[i];
+
+    if (curr.anchorX - prev.anchorX <= clusterThreshold) {
+      // Close enough - add to current cluster
+      currentCluster.push(curr);
+    } else {
+      // Gap detected - start new cluster
+      clusters.push(currentCluster);
+      currentCluster = [curr];
+    }
+  }
+  clusters.push(currentCluster);
+
+  // Layout each cluster
+  const margin = 40;
+
+  for (const cluster of clusters) {
+    if (cluster.length === 1) {
+      // Single item stays at anchor
+      cluster[0].x = cluster[0].anchorX;
+      continue;
+    }
+
+    // Calculate cluster bounds
+    const minAnchor = cluster[0].anchorX;
+    const maxAnchor = cluster[cluster.length - 1].anchorX;
+    const anchorSpan = maxAnchor - minAnchor;
+    const midpoint = (minAnchor + maxAnchor) / 2;
+
+    // Required span for this cluster
+    const requiredSpan = (cluster.length - 1) * minSpacing;
+    const effectiveSpan = Math.max(anchorSpan, requiredSpan);
+
+    // Position cluster centered on its anchor midpoint
+    let startX = midpoint - effectiveSpan / 2;
+    let endX = midpoint + effectiveSpan / 2;
+
+    // Clamp to width bounds
+    if (startX < margin) {
+      startX = margin;
+      endX = startX + effectiveSpan;
+    }
+    if (endX > width - margin) {
+      endX = width - margin;
+      startX = endX - effectiveSpan;
+    }
+    startX = Math.max(margin, startX);
+
+    // Distribute evenly within cluster region
+    const spacing = (endX - startX) / (cluster.length - 1);
+    for (let i = 0; i < cluster.length; i++) {
+      cluster[i].x = startX + i * spacing;
+    }
   }
 
-  const nodes: SimNode[] = selectedTier.map(l => ({
-    x: l.anchorX,
-    anchorX: l.anchorX,
-    radius: l.radius + l.labelWidth * 0.3, // Account for label space
-    lollipop: l,
-  }));
+  // Resolve any inter-cluster overlaps
+  resolveClusterOverlaps(clusters, minSpacing, width, margin);
+}
 
-  // Run force simulation with strong pull to anchor
-  const simulation = forceSimulation(nodes)
-    .force('x', forceX<SimNode>(d => d.anchorX).strength(0.8))
-    .force('collide', forceCollide<SimNode>(d => d.radius + 15).strength(1))
-    .stop();
+/**
+ * Push clusters apart if they overlap
+ */
+function resolveClusterOverlaps(
+  clusters: LollipopData[][],
+  minSpacing: number,
+  width: number,
+  margin: number
+): void {
+  if (clusters.length < 2) return;
 
-  // Run simulation
-  for (let i = 0; i < 100; i++) {
-    simulation.tick();
-  }
+  for (let iter = 0; iter < 5; iter++) {
+    let hasOverlap = false;
 
-  // Apply positions back, clamping to width bounds
-  const margin = 30;
-  for (const node of nodes) {
-    node.lollipop.x = Math.max(margin, Math.min(width - margin, node.x));
+    for (let i = 0; i < clusters.length - 1; i++) {
+      const leftCluster = clusters[i];
+      const rightCluster = clusters[i + 1];
+
+      const leftRight = leftCluster[leftCluster.length - 1].x;
+      const rightLeft = rightCluster[0].x;
+      const gap = rightLeft - leftRight;
+
+      if (gap < minSpacing) {
+        hasOverlap = true;
+        const shift = (minSpacing - gap) / 2 + 2;
+
+        // Shift left cluster left
+        for (const l of leftCluster) {
+          l.x = Math.max(margin, l.x - shift);
+        }
+        // Shift right cluster right
+        for (const l of rightCluster) {
+          l.x = Math.min(width - margin, l.x + shift);
+        }
+      }
+    }
+
+    if (!hasOverlap) break;
   }
 }
 

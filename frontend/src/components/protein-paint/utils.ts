@@ -288,8 +288,8 @@ export function layoutLollipops(
 }
 
 /**
- * Force layout for top tier that accounts for label width
- * If labels don't fit, switches to circle-only mode with collision layout
+ * Layout for top tier: spread lollipops evenly, then resolve label overlaps
+ * This creates the characteristic "fanned out" look with crank stems
  */
 function runTopTierForceLayout(
   topTier: LollipopData[],
@@ -298,71 +298,61 @@ function runTopTierForceLayout(
 ): void {
   if (topTier.length === 0) return;
 
-  // Sort by anchor position so they spread in order
+  // Sort by anchor position so they spread in genomic order
   topTier.sort((a, b) => a.anchorX - b.anchorX);
-
-  // Calculate total width needed for labels (disc + label + padding)
-  const labelPadding = 8;  // Space between label end and next disc
-  const totalLabelWidth = topTier.reduce(
-    (sum, l) => sum + l.radius * 2 + l.labelWidth + labelPadding,
-    0
-  );
 
   const margin = 40;
   const availableWidth = width - 2 * margin;
 
-  // Check if labels fit
-  const labelsWillFit = totalLabelWidth <= availableWidth;
+  // Spread lollipops evenly across the width
+  // This creates the fanned-out crank stem appearance
+  const spacing = topTier.length > 1 ? availableWidth / (topTier.length - 1) : 0;
 
-  if (labelsWillFit) {
-    // Labels fit: spread evenly and show labels
-    const spacing = topTier.length > 1 ? availableWidth / (topTier.length - 1) : 0;
-
-    for (let i = 0; i < topTier.length; i++) {
-      topTier[i].x = margin + i * spacing;
-      topTier[i].y = params.topTierY;
-      topTier[i].showLabel = true;
-    }
-  } else {
-    // Labels don't fit: use collision layout, circles only
-    runCollisionLayout(topTier, width, params);
+  for (let i = 0; i < topTier.length; i++) {
+    topTier[i].x = margin + i * spacing;
+    topTier[i].y = params.topTierY;
+    topTier[i].showLabel = false;
   }
+
+  // Resolve label collisions - show labels only where they fit
+  resolveLabelCollisions(topTier, width);
 }
 
 /**
- * Collision-based layout that keeps discs close to their genomic anchors
- * Used when there are too many variants to show labels
+ * Determine which labels to show based on collision detection
+ * Iterates left-to-right, showing labels only when there's room
  */
-function runCollisionLayout(
-  topTier: LollipopData[],
-  width: number,
-  params: LayoutParams
+function resolveLabelCollisions(
+  lollipops: LollipopData[],
+  width: number
 ): void {
-  const margin = 20;
-  const padding = 3;  // Minimum gap between discs
+  // Sort by X position (left to right)
+  const sorted = [...lollipops].sort((a, b) => a.x - b.x);
 
-  // Initialize positions at anchor
-  for (const l of topTier) {
-    l.x = l.anchorX;
-    l.y = params.topTierY;
-    l.showLabel = false;
-  }
+  const labelGap = 4;  // Minimum gap between label end and next disc
+  let rightBoundary = -Infinity;  // Right edge of last shown label
 
-  // Use d3-force for collision detection (use max radius for collision)
-  const simulation = forceSimulation(topTier as any)
-    .force('x', forceX((d: any) => d.anchorX).strength(0.8))
-    .force('collide', forceCollide((d: any) => (d.radius || 5) + padding).strength(1))
-    .stop();
+  for (const lollipop of sorted) {
+    // Calculate where this label would start (right edge of disc + small gap)
+    const labelStart = lollipop.x + lollipop.radius + 3;
 
-  // Run simulation synchronously
-  for (let i = 0; i < 120; i++) {
-    simulation.tick();
-  }
+    // Check if there's room for this label
+    if (labelStart > rightBoundary) {
+      // Show this label
+      lollipop.showLabel = true;
+      // Update boundary to include this label
+      rightBoundary = labelStart + lollipop.labelWidth + labelGap;
+    } else {
+      // No room - hide this label, but update boundary to disc edge
+      lollipop.showLabel = false;
+      // The next label needs to clear at least this disc
+      rightBoundary = Math.max(rightBoundary, lollipop.x + lollipop.radius + labelGap);
+    }
 
-  // Clamp to bounds
-  for (const l of topTier) {
-    l.x = Math.max(margin + l.radius, Math.min(width - margin - l.radius, l.x));
-    l.y = params.topTierY;  // Keep Y fixed
+    // Don't let labels extend past the right edge
+    if (rightBoundary > width - 10) {
+      lollipop.showLabel = false;
+    }
   }
 }
 

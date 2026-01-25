@@ -117,26 +117,23 @@ export function ProteinPaintTrack({
     const expandedTiers = lollipops.filter(l => l.isExpanded);
     const regularTiers = lollipops.filter(l => !l.isExpanded);
 
-    // Get tier positions for layer-aware crank stems
-    const tierPositions = getTierPositions(height);
-
     // Group expanded tiers by layerId for calculating knee positions
     const selectedTier = expandedTiers.filter(l => l.layerId === 'selected');
-    const lofTier = expandedTiers.filter(l => l.layerId === 'lof');
+    // Non-selected expanded tier (could be LoF, missense, etc. depending on filtering)
+    const topExpandedTier = expandedTiers.filter(l => l.layerId !== 'selected');
 
     // Calculate bottom of each expanded tier for crank positioning
     const selectedTierBottom = selectedTier.length > 0
       ? Math.max(...selectedTier.map(l => l.y + l.stackHeight)) + 3
       : 0;
-    const lofTierBottom = lofTier.length > 0
-      ? Math.max(...lofTier.map(l => l.y + l.stackHeight)) + 3
+    const topExpandedTierBottom = topExpandedTier.length > 0
+      ? Math.max(...topExpandedTier.map(l => l.y + l.stackHeight)) + 3
       : 0;
 
-    // The lower knee of the crank must be ABOVE the next layer
-    // For selected tier: knee above LoF tier (or missense if no LoF)
-    // For LoF tier: knee above missense layer
-    const missenseTop = tierPositions.missense - 20;
-    const lofTop = tierPositions.lof - 10;
+    // Find the top of the first non-expanded tier (for knee positioning)
+    const firstCondensedY = regularTiers.length > 0
+      ? Math.min(...regularTiers.map(l => l.y)) - 20
+      : baselineY - 50;
 
     // Draw regular (non-expanded) tiers first (simple straight stems with stacked discs)
     for (const lollipop of regularTiers) {
@@ -198,26 +195,26 @@ export function ProteinPaintTrack({
       ctx.lineWidth = isSelected ? 1.5 : 1;
       ctx.beginPath();
 
-      // Calculate crank segments based on tier
+      // Calculate crank segments based on layer type
       // The upper knee is just below this tier's stack
       // The lower knee is above the next tier
       let upperKnee: number;
       let lowerKnee: number;
 
       if (lollipop.layerId === 'selected') {
-        // Selected layer: keep stem VERTICAL through LoF tier region to avoid collisions
-        // Upper knee is BELOW the LoF tier (after passing through it vertically)
-        // This ensures selected stems don't cross LoF tier labels
-        const lofLowerKnee = lofTierBottom < missenseTop
-          ? Math.min(lofTierBottom + 15, missenseTop)
-          : lofTierBottom + 8;
-        upperKnee = lofLowerKnee;  // Start diagonal BELOW LoF tier
-        lowerKnee = lofLowerKnee + 20;  // Short diagonal segment
+        // Selected layer: keep stem VERTICAL through the top expanded tier region
+        // Upper knee is BELOW the top expanded tier (after passing through it vertically)
+        // This ensures selected stems don't cross top tier labels
+        const topTierLowerKnee = topExpandedTierBottom < firstCondensedY
+          ? Math.min(topExpandedTierBottom + 15, firstCondensedY)
+          : topExpandedTierBottom + 8;
+        upperKnee = topTierLowerKnee;  // Start diagonal BELOW top expanded tier
+        lowerKnee = topTierLowerKnee + 20;  // Short diagonal segment
       } else {
-        // Other expanded layers (e.g., LoF): crank above missense
-        upperKnee = lofTierBottom;
-        lowerKnee = upperKnee < missenseTop
-          ? Math.min(upperKnee + 15, missenseTop)
+        // Other expanded layers: crank above the first condensed tier
+        upperKnee = stackBottom + 3;
+        lowerKnee = upperKnee < firstCondensedY
+          ? Math.min(upperKnee + 15, firstCondensedY)
           : upperKnee + 8;
       }
 

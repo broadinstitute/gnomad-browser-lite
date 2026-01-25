@@ -440,22 +440,41 @@ export function layoutLollipops(
     }
   }
 
-  // Find the first non-selection expanded layer (for collision avoidance)
-  const firstExpandedLayer = layerConfig.find(l => l.id !== 'selected' && l.layout === 'expanded');
+  // Find the dynamic top tier: the first non-selection layer that has lollipops
+  // This layer gets expanded/crankshaft treatment even if its config says 'condensed'
+  let dynamicTopLayer: LayerDefinition | null = null;
+  for (const layer of layerConfig) {
+    if (layer.id === 'selected') continue;
+    const items = layerGroups.get(layer.id) || [];
+    if (items.length > 0) {
+      dynamicTopLayer = layer;
+      break;
+    }
+  }
 
   // Layout each layer
   for (const layer of layerConfig) {
     const items = layerGroups.get(layer.id) || [];
     if (items.length === 0) continue;
 
-    // Set Y position from layer config
+    // Determine if this layer should be expanded:
+    // - Selection layer is always expanded
+    // - Dynamic top layer (first non-selection layer with variants) is expanded
+    // - Otherwise use the layer's configured layout
+    const isDynamicTopLayer = dynamicTopLayer && layer.id === dynamicTopLayer.id;
+    const shouldBeExpanded = layer.id === 'selected' || isDynamicTopLayer || layer.layout === 'expanded';
+
+    // Set Y position - dynamic top layer moves to the standard top tier position (60)
+    // This ensures crankshaft stems render correctly
+    const effectiveY = (isDynamicTopLayer && layer.layout !== 'expanded') ? 60 : layer.y;
+
     for (const item of items) {
-      item.y = layer.y;
-      item.isExpanded = layer.layout === 'expanded';
+      item.y = effectiveY;
+      item.isExpanded = shouldBeExpanded;
       item.isTopTier = item.isExpanded;  // Backward compatibility
     }
 
-    if (layer.layout === 'expanded') {
+    if (shouldBeExpanded) {
       if (layer.id === 'selected') {
         // Use dedicated selected tier layout (pulls toward anchor)
         runSelectedTierLayout(items, width, params);
@@ -479,10 +498,10 @@ export function layoutLollipops(
     }
   }
 
-  // Cross-layer collision avoidance: selected stems vs first expanded layer
-  if (hasSelectedVariants && firstExpandedLayer) {
+  // Cross-layer collision avoidance: selected stems vs dynamic top layer
+  if (hasSelectedVariants && dynamicTopLayer) {
     const selectedItems = layerGroups.get('selected') || [];
-    const expandedItems = layerGroups.get(firstExpandedLayer.id) || [];
+    const expandedItems = layerGroups.get(dynamicTopLayer.id) || [];
     const nonSelectedExpanded = expandedItems.filter(l => !l.isSelected);
 
     if (selectedItems.length > 0 && nonSelectedExpanded.length > 0) {

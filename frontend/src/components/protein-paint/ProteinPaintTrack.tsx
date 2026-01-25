@@ -174,8 +174,16 @@ export function ProteinPaintTrack({
       ctx.lineTo(lollipop.anchorX, baselineY);
       ctx.stroke();
 
-      // Draw stacked discs (top to bottom)
-      for (const disc of lollipop.discs) {
+      // Find next lollipop to check horizontal space for secondary labels
+      const lofIndex = lofTier.indexOf(lollipop);
+      const nextLollipop = lofIndex < lofTier.length - 1 ? lofTier[lofIndex + 1] : null;
+      const spaceToNext = nextLollipop
+        ? nextLollipop.x - nextLollipop.radius - (x + lollipop.radius)
+        : width - x - lollipop.radius;
+
+      // Draw stacked discs (top to bottom) with optional horizontal labels for lower discs
+      for (let discIdx = 0; discIdx < lollipop.discs.length; discIdx++) {
+        const disc = lollipop.discs[discIdx];
         const discY = lollipop.y + disc.stackY + disc.radius;  // Center Y of this disc
 
         ctx.beginPath();
@@ -188,9 +196,23 @@ export function ProteinPaintTrack({
         ctx.strokeStyle = isHovered ? '#000' : 'rgba(0,0,0,0.3)';
         ctx.lineWidth = isHovered ? 2 : 1;
         ctx.stroke();
+
+        // For lower discs in allelic series: show horizontal label if space available
+        if (discIdx > 0 && disc.label) {
+          const labelWidth = disc.label.length * 6 + 4;  // Estimate
+          const labelGap = 8;
+          if (spaceToNext >= labelWidth + labelGap || isHovered) {
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = disc.color;
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(disc.label, x + lollipop.radius + 3, discY);
+          }
+        }
       }
 
-      // Draw label (only when showLabel is true, or on hover) - show top disc's label
+      // Draw primary label for top disc (with rotation based on density)
       if (lollipop.label && (lollipop.showLabel || isHovered)) {
         ctx.globalAlpha = 1;
         ctx.fillStyle = lollipop.color;

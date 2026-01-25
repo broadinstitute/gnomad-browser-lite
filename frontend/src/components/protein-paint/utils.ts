@@ -290,7 +290,7 @@ export function getTierPositions(height: number): Record<string, number> {
 /**
  * Assign lollipops to tiers based on consequence and selection
  * The highest-severity tier present becomes the "top tier" with spread layout
- * Selected variants get elevated but keep their spread X position from their consequence tier
+ * Selected variants get their own dedicated tier with X positions pulled toward anchorX
  */
 export function layoutLollipops(
   lollipops: LollipopData[],
@@ -345,9 +345,16 @@ export function layoutLollipops(
     }
   }
 
-  // Run spread layout on the dynamic top tier (includes selected variants at their consequence tier)
+  // Collect selected lollipops BEFORE running spread layout
+  const selectedLollipops: LollipopData[] = lollipops.filter(l => l.isSelected);
+
+  // Run spread layout on the dynamic top tier, EXCLUDING selected variants
+  // Selected variants will get their own layout
   if (dynamicTopTier && consequenceTiers[dynamicTopTier].length > 0) {
-    runTopTierForceLayout(consequenceTiers[dynamicTopTier], width, params);
+    const nonSelectedInTopTier = consequenceTiers[dynamicTopTier].filter(l => !l.isSelected);
+    if (nonSelectedInTopTier.length > 0) {
+      runTopTierForceLayout(nonSelectedInTopTier, width, params);
+    }
   }
 
   // Apply opportunistic horizontal labels to lower tiers
@@ -357,17 +364,16 @@ export function layoutLollipops(
     }
   }
 
-  // Second pass: elevate selected variants to selected tier
-  // They keep their X position from the spread layout, but get elevated Y
-  const selectedLollipops: LollipopData[] = [];
-  for (const lollipop of lollipops) {
-    if (lollipop.isSelected) {
+  // Second pass: layout selected variants in their dedicated tier
+  // Pull X positions toward anchorX (their actual genomic position)
+  if (selectedLollipops.length > 0) {
+    for (const lollipop of selectedLollipops) {
       lollipop.tier = 'selected';
       lollipop.y = tierY.selected;
       lollipop.isExpanded = true;
-      selectedLollipops.push(lollipop);
-      // x position is preserved from the spread layout above
     }
+    // Run dedicated layout for selected tier, pulling toward anchorX
+    runSelectedTierLayout(selectedLollipops, width, params);
   }
 
   // Third pass: avoid collisions between selected stems and LoF tier discs/labels
@@ -382,7 +388,7 @@ export function layoutLollipops(
     lollipop.isTopTier = lollipop.isExpanded;
   }
 
-  // Resolve labels for selected tier (they already have X positions)
+  // Resolve labels for selected tier
   if (selectedLollipops.length > 0) {
     resolveLabelCollisions(selectedLollipops, width);
   }
@@ -390,68 +396,45 @@ export function layoutLollipops(
 
 /**
  * Avoid collisions between selected tier stems and LoF tier discs/labels
- * Shifts LoF variants toward their anchor X to make room for selected stems
+ * Selected stems are now VERTICAL through the LoF tier (at selected.x),
+ * so we just need to ensure LoF variants don't overlap with that vertical line
  */
 function avoidStemCollisions(
   selectedLollipops: LollipopData[],
   lofLollipops: LollipopData[],
-  tierY: Record<string, number>,
-  height: number
+  _tierY: Record<string, number>,
+  _height: number
 ): void {
   if (selectedLollipops.length === 0 || lofLollipops.length === 0) return;
 
-  // Calculate where each selected stem crosses the LoF tier Y level
-  // The stem diagonal goes from (x, upperKnee) to (anchorX, lowerKnee)
-  // We need to find X at the LoF disc Y level
-
-  const selectedTierBottom = Math.max(...selectedLollipops.map(l => l.y + l.stackHeight)) + 3;
-  const lofTierBottom = Math.max(...lofLollipops.map(l => tierY.lof + l.stackHeight)) + 3;
-  const missenseTop = tierY.missense - 20;
-
-  const upperKneeY = selectedTierBottom + 12;
-  const lowerKneeY = lofTierBottom < missenseTop
-    ? Math.min(lofTierBottom + 15, missenseTop)
-    : lofTierBottom + 8;
-
-  // LoF disc center Y
-  const lofDiscY = tierY.lof + 10; // Approximate center of LoF discs
+  // Selected stems are now vertical through the LoF tier at selected.x
+  // We need to ensure LoF discs and labels don't overlap with these vertical lines
+  const stemClearance = 10;
+  const labelAngleAdjust = 1.1;  // Labels at -45° extend further than simple horizontal calc
 
   for (const selected of selectedLollipops) {
-    // Interpolate to find stem X at LoF disc Y level
-    // Linear interpolation between (x, upperKneeY) and (anchorX, lowerKneeY)
-    if (Math.abs(selected.x - selected.anchorX) < 2) continue; // No diagonal, no collision risk
-
-    const t = (lofDiscY - upperKneeY) / (lowerKneeY - upperKneeY);
-    const stemXAtLof = selected.x + t * (selected.anchorX - selected.x);
-
-    // Check for collisions with LoF discs and labels
-    const stemClearance = 15; // Minimum clearance around stem
+    // The stem is at selected.x through the LoF tier region
+    const stemX = selected.x;
 
     for (const lof of lofLollipops) {
-      // Account for rotated labels (diagonal labels extend both horizontally and vertically)
-      const labelExtent = lof.showLabel ? lof.labelWidth * 0.8 : 0;
-      const lofLeft = lof.x - lof.radius - stemClearance;
-      const lofRight = lof.x + lof.radius + labelExtent + stemClearance;
+      // Calculate the full extent of this LoF variant (disc + angled label)
+      const labelExtent = lof.showLabel ? lof.labelWidth * labelAngleAdjust : 0;
+      const lofLeft = lof.x - lof.radius;
+      const lofRight = lof.x + lof.radius + labelExtent;
 
-      // Check if stem passes through the LoF disc/label zone
-      if (stemXAtLof > lofLeft && stemXAtLof < lofRight) {
-        // Collision detected! Shift LoF variant toward its anchor
-        const shiftAmount = stemClearance + lof.radius + labelExtent + 8;
+      // Check if stem passes through this LoF variant's zone
+      const hasCollision = stemX > lofLeft - stemClearance && stemX < lofRight + stemClearance;
 
-        if (stemXAtLof < lof.x) {
-          // Stem is to the left of disc center, shift disc right (toward anchor if anchor is right)
-          if (lof.anchorX > lof.x) {
-            lof.x = Math.min(lof.x + shiftAmount, lof.anchorX);
-          } else {
-            lof.x = lof.x + shiftAmount;
-          }
+      if (hasCollision) {
+        // Collision detected! Shift LoF variant away from the stem
+        if (stemX <= lof.x) {
+          // Stem is to the left of disc center, shift LoF disc to the right
+          const shiftNeeded = stemX + stemClearance + lof.radius - lof.x + 5;
+          lof.x = lof.x + shiftNeeded;
         } else {
-          // Stem is to the right of disc center, shift disc left (toward anchor if anchor is left)
-          if (lof.anchorX < lof.x) {
-            lof.x = Math.max(lof.x - shiftAmount, lof.anchorX);
-          } else {
-            lof.x = lof.x - shiftAmount;
-          }
+          // Stem is to the right of disc center, shift LoF disc to the left
+          const shiftNeeded = lof.x + lof.radius + labelExtent + stemClearance - stemX + 5;
+          lof.x = lof.x - shiftNeeded;
         }
       }
     }
@@ -459,6 +442,9 @@ function avoidStemCollisions(
 
   // After stem avoidance, resolve any disc-disc overlaps within LoF tier
   resolveDiscOverlaps(lofLollipops);
+
+  // Re-resolve labels since positions changed
+  resolveLabelCollisions(lofLollipops, 2000);  // Use large width to not clip
 }
 
 /**
@@ -581,6 +567,64 @@ function runTopTierForceLayout(
 
   // Resolve label collisions - show labels only where they fit
   resolveLabelCollisions(topTier, width);
+}
+
+/**
+ * Layout for selected tier: pull variants toward their anchor position
+ * Uses force simulation with strong pull to anchorX and collision avoidance
+ */
+function runSelectedTierLayout(
+  selectedTier: LollipopData[],
+  width: number,
+  _params: LayoutParams
+): void {
+  if (selectedTier.length === 0) return;
+
+  // Initialize X to anchorX (Y is already set from tierY in layoutLollipops)
+  for (const lollipop of selectedTier) {
+    lollipop.x = lollipop.anchorX;
+    lollipop.showLabel = false;
+  }
+
+  if (selectedTier.length === 1) {
+    // Single selected variant stays at its anchor
+    return;
+  }
+
+  // Sort by anchor position
+  selectedTier.sort((a, b) => a.anchorX - b.anchorX);
+
+  // Use force simulation to resolve overlaps while keeping close to anchor
+  interface SimNode {
+    x: number;
+    anchorX: number;
+    radius: number;
+    lollipop: LollipopData;
+  }
+
+  const nodes: SimNode[] = selectedTier.map(l => ({
+    x: l.anchorX,
+    anchorX: l.anchorX,
+    radius: l.radius + l.labelWidth * 0.3, // Account for label space
+    lollipop: l,
+  }));
+
+  // Run force simulation with strong pull to anchor
+  const simulation = forceSimulation(nodes)
+    .force('x', forceX<SimNode>(d => d.anchorX).strength(0.8))
+    .force('collide', forceCollide<SimNode>(d => d.radius + 15).strength(1))
+    .stop();
+
+  // Run simulation
+  for (let i = 0; i < 100; i++) {
+    simulation.tick();
+  }
+
+  // Apply positions back, clamping to width bounds
+  const margin = 30;
+  for (const node of nodes) {
+    node.lollipop.x = Math.max(margin, Math.min(width - margin, node.x));
+  }
 }
 
 /**

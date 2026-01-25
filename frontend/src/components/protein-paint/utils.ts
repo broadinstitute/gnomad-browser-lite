@@ -270,6 +270,7 @@ export function getTierPositions(height: number): Record<string, number> {
 
 /**
  * Assign lollipops to tiers based on consequence
+ * The highest-severity tier present becomes the "top tier" with spread layout
  */
 export function layoutLollipops(
   lollipops: LollipopData[],
@@ -282,6 +283,7 @@ export function layoutLollipops(
   const tierY = getTierPositions(height);
 
   // Group by tier
+  const tierOrder = ['lof', 'missense', 'synonymous', 'noncoding'] as const;
   const tiers: Record<string, LollipopData[]> = {
     lof: [],
     missense: [],
@@ -292,13 +294,77 @@ export function layoutLollipops(
   for (const lollipop of lollipops) {
     const tier = getTier(lollipop.priority);
     tiers[tier].push(lollipop);
-    lollipop.isTopTier = tier === 'lof'; // Only LoF gets special treatment
     lollipop.y = tierY[tier];
   }
 
-  // Spread LoF evenly with labels
-  if (tiers.lof.length > 0) {
-    runTopTierForceLayout(tiers.lof, width, params);
+  // Find the highest-severity tier that has variants (becomes top tier)
+  let topTierName: string | null = null;
+  for (const tier of tierOrder) {
+    if (tiers[tier].length > 0) {
+      topTierName = tier;
+      break;
+    }
+  }
+
+  // Mark top tier variants and apply spread layout
+  for (const lollipop of lollipops) {
+    const tier = getTier(lollipop.priority);
+    lollipop.isTopTier = tier === topTierName;
+  }
+
+  // Apply spread layout to top tier
+  if (topTierName && tiers[topTierName].length > 0) {
+    runTopTierForceLayout(tiers[topTierName], width, params);
+  }
+
+  // Apply opportunistic horizontal labels to lower tiers
+  for (const tier of tierOrder) {
+    if (tier !== topTierName && tiers[tier].length > 0) {
+      resolveHorizontalLabels(tiers[tier], width);
+    }
+  }
+}
+
+/**
+ * Resolve horizontal-only labels for lower tiers
+ * Only shows labels where there's clear horizontal space
+ */
+function resolveHorizontalLabels(
+  lollipops: LollipopData[],
+  width: number
+): void {
+  // Sort by X position (anchorX for lower tiers)
+  const sorted = [...lollipops].sort((a, b) => a.anchorX - b.anchorX);
+
+  const labelGap = 8;  // More generous gap for lower tiers
+  let rightBoundary = -Infinity;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const lollipop = sorted[i];
+    const labelStart = lollipop.anchorX + lollipop.radius + 3;
+    const labelEnd = labelStart + lollipop.labelWidth;
+
+    // Check space on left (from previous label/disc)
+    const hasRoomOnLeft = labelStart >= rightBoundary + labelGap;
+
+    // Check space on right (next disc's left edge)
+    let hasRoomOnRight = true;
+    if (i < sorted.length - 1) {
+      const nextLollipop = sorted[i + 1];
+      const nextDiscLeft = nextLollipop.anchorX - nextLollipop.radius;
+      hasRoomOnRight = labelEnd + labelGap <= nextDiscLeft;
+    } else {
+      hasRoomOnRight = labelEnd <= width - 10;
+    }
+
+    if (hasRoomOnLeft && hasRoomOnRight) {
+      lollipop.showLabel = true;
+      lollipop.labelAngle = 0;  // Horizontal only for lower tiers
+      rightBoundary = labelEnd;
+    } else {
+      lollipop.showLabel = false;
+      rightBoundary = Math.max(rightBoundary, lollipop.anchorX + lollipop.radius);
+    }
   }
 }
 

@@ -128,10 +128,10 @@ export function ProteinPaintTrack({
         ctx.stroke();
       }
 
-      // Show label on hover only (show top disc's label)
-      if (isHovered && lollipop.label) {
+      // Show label if space available or on hover (horizontal only for lower tiers)
+      if (lollipop.label && (lollipop.showLabel || isHovered)) {
         ctx.globalAlpha = 1;
-        ctx.fillStyle = '#333';
+        ctx.fillStyle = isHovered ? '#333' : lollipop.color;
         ctx.font = 'bold 10px sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';

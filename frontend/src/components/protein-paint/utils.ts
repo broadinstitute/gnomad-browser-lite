@@ -21,11 +21,11 @@ import {
 
 /** Fixed Y positions for each layer (used for consistent spacing) */
 export const LAYER_Y_POSITIONS = {
-  selected: 40,
-  lof: 60,
-  missense: 130,
-  synonymous: 175,
-  noncoding: 205,
+  selected: 25,   // Selection layer at top with room for labels
+  lof: 80,        // Gap below selection for crankshaft geometry
+  missense: 150,
+  synonymous: 195,
+  noncoding: 225,
 } as const;
 
 /** Spacing between the lowest layer and the baseline */
@@ -33,9 +33,9 @@ const BASELINE_PADDING = 35;
 
 /**
  * Minimum height for proper crankshaft rendering
- * Accounts for: top tier Y (60) + stack (~30) + upper vertical (20) + diagonal (40) + lower vertical (25) + padding
+ * Accounts for: top tier Y (80) + stack (~30) + upper vertical (20) + diagonal (40) + lower vertical (25) + padding
  */
-const MIN_HEIGHT_FOR_CRANKSHAFT = 185;
+const MIN_HEIGHT_FOR_CRANKSHAFT = 205;
 
 /**
  * Create standard layer configuration that reproduces current gnomAD behavior
@@ -117,7 +117,7 @@ export function createSelectionLayer(selectedIds: Set<string>): LayerDefinition 
     label: 'Selected',
     filter: (variants) => variants.some(v => selectedIds.has(v.variant_id || '')),
     color: '#1976d2',
-    y: 40,
+    y: LAYER_Y_POSITIONS.selected,
     layout: 'expanded',
     zOrder: 100, // Highest priority
   };
@@ -378,13 +378,13 @@ export function createLollipops(
  * Tier configuration - defines Y positions and layout behavior
  * Selected tier is dynamically inserted above the highest-priority present tier
  */
-export function getTierConfig(height: number): Record<TierName, TierConfig> {
+export function getTierConfig(_height?: number): Record<TierName, TierConfig> {
   return {
-    selected: { y: 40, expanded: true, basePriority: 10000 },  // User-selected always on top
-    lof: { y: 60, expanded: true, basePriority: 4000 },
-    missense: { y: height * 0.55, expanded: false, basePriority: 3000 },
-    synonymous: { y: height * 0.72, expanded: false, basePriority: 2000 },
-    noncoding: { y: height * 0.85, expanded: false, basePriority: 1000 },
+    selected: { y: LAYER_Y_POSITIONS.selected, expanded: true, basePriority: 10000 },
+    lof: { y: LAYER_Y_POSITIONS.lof, expanded: true, basePriority: 4000 },
+    missense: { y: LAYER_Y_POSITIONS.missense, expanded: false, basePriority: 3000 },
+    synonymous: { y: LAYER_Y_POSITIONS.synonymous, expanded: false, basePriority: 2000 },
+    noncoding: { y: LAYER_Y_POSITIONS.noncoding, expanded: false, basePriority: 1000 },
   };
 }
 

@@ -33,20 +33,26 @@ export function getLayoutParams(height: number): LayoutParams {
 }
 
 /**
- * Calculate disc radius based on variant count using log scale
+ * Calculate disc radius based on allele frequency using log scale
+ * AF typically ranges from very rare (1e-6) to common (0.5)
  */
 function calculateDiscRadius(
-  count: number,
-  maxCount: number,
+  af: number,
+  maxAf: number,
   params: LayoutParams
 ): number {
-  if (count <= 1) {
-    return params.minRadius;
-  }
+  // Use a minimum AF floor to avoid log(0) issues
+  const minAf = 1e-7;
+  const safeAf = Math.max(af, minAf);
+  const safeMaxAf = Math.max(maxAf, minAf);
 
-  const logCount = Math.log(count);
-  const logMax = Math.log(Math.max(maxCount, 2));
-  const normalized = logCount / logMax;
+  // Log scale for AF (spans many orders of magnitude)
+  const logAf = Math.log10(safeAf);
+  const logMax = Math.log10(safeMaxAf);
+  const logMin = Math.log10(minAf);
+
+  // Normalize to 0-1 range
+  const normalized = (logAf - logMin) / (logMax - logMin);
 
   return params.minRadius + normalized * (params.maxRadius - params.minRadius);
 }
@@ -130,17 +136,18 @@ export function createLollipops(
     positionMap.get(pos)!.push(variant);
   }
 
-  // Find max count across all hgvsp groups for radius scaling
-  let maxCount = 1;
+  // Find max AF across all hgvsp groups for radius scaling
+  let maxAf = 0;
   for (const posVariants of positionMap.values()) {
-    // Group by hgvsp within this position
-    const hgvspCounts = new Map<string, number>();
+    // Group by hgvsp within this position and sum AF
+    const hgvspAfs = new Map<string, number>();
     for (const v of posVariants) {
       const hgvsp = v.hgvsp || 'unknown';
-      hgvspCounts.set(hgvsp, (hgvspCounts.get(hgvsp) || 0) + 1);
+      const af = v.af || v.allele_freq || 0;
+      hgvspAfs.set(hgvsp, (hgvspAfs.get(hgvsp) || 0) + af);
     }
-    for (const count of hgvspCounts.values()) {
-      maxCount = Math.max(maxCount, count);
+    for (const af of hgvspAfs.values()) {
+      maxAf = Math.max(maxAf, af);
     }
   }
 
@@ -164,10 +171,11 @@ export function createLollipops(
       const count = hgvspVariants.length;
       const label = parseHgvspLabel(hgvsp);
 
-      // Determine color and priority from highest-priority variant in this group
+      // Determine color, priority, and sum AF from variants in this group
       let color = '#757575';
       let priority = 0;
       let totalAC = 0;
+      let totalAF = 0;
       for (const v of hgvspVariants) {
         const p = getConsequencePriority(v.consequence || '');
         if (p > priority) {
@@ -175,6 +183,7 @@ export function createLollipops(
           color = getVariantColor(v);
         }
         totalAC += v.ac || 0;
+        totalAF += v.af || v.allele_freq || 0;
       }
 
       // Priority: consequence class * 1000 + allele count
@@ -185,7 +194,7 @@ export function createLollipops(
         label,
         variants: hgvspVariants,
         count,
-        radius: calculateDiscRadius(count, maxCount, params),
+        radius: calculateDiscRadius(totalAF, maxAf, params),
         color,
         priority: effectivePriority,
         stackY: 0,  // Will be calculated after sorting

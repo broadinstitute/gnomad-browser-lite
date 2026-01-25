@@ -109,6 +109,10 @@ export function ZoomOverview({
     stopGenomic: number; // Initial genomic stop
   } | null>(null);
 
+  // Refs to track drag status for click blocking
+  const dragMovedRef = useRef(false);
+  const clickBlockerRef = useRef(false);
+
   // Measure container width
   useEffect(() => {
     if (!containerRef.current) return;
@@ -193,6 +197,10 @@ export function ZoomOverview({
   ) => {
     e.preventDefault();
     e.stopPropagation();
+
+    // Reset drag tracking
+    dragMovedRef.current = false;
+
     setDragState({
       type,
       startX: e.clientX,
@@ -207,6 +215,11 @@ export function ZoomOverview({
     if (!dragState) return;
 
     const deltaX = e.clientX - dragState.startX;
+
+    // Mark as moved if threshold exceeded
+    if (!dragMovedRef.current && Math.abs(deltaX) > 3) {
+      dragMovedRef.current = true;
+    }
 
     let newStart = dragState.startGenomic;
     let newStop = dragState.stopGenomic;
@@ -243,8 +256,17 @@ export function ZoomOverview({
   }, [dragState, scale, gene.start, gene.stop, onRegionChange]);
 
   const handleMouseUp = useCallback(() => {
+    if (dragState) {
+      // Block subsequent click if we dragged
+      clickBlockerRef.current = dragMovedRef.current;
+    }
     setDragState(null);
-  }, []);
+
+    // Clear block flag after current event loop to allow click handler to see it
+    setTimeout(() => {
+      clickBlockerRef.current = false;
+    }, 0);
+  }, [dragState]);
 
   // Add/remove global mouse listeners for drag
   useEffect(() => {
@@ -260,7 +282,8 @@ export function ZoomOverview({
 
   // Click on track to center selection there
   const handleTrackClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (dragState) return;
+    // Ignore click if currently dragging or just finished a drag
+    if (dragState || clickBlockerRef.current) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;

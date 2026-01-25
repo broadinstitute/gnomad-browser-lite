@@ -119,22 +119,30 @@ export function ProteinPaintTrack({
       }
     }
 
-    // Draw LoF tier (diagonal stems with labels)
+    // Draw LoF tier (crank/dog-leg stems with labels)
     for (const lollipop of lofTier) {
       const isHovered = lollipop.id === hoveredId;
 
-      // Draw stem: straight up from baseline, then diagonal to disc
+      // Draw stem with crank/dog-leg style:
+      // Upper vertical -> Diagonal -> Lower vertical
       ctx.strokeStyle = '#999';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(lollipop.anchorX, baselineY);
 
-      // Vertical part
-      const bendY = lollipop.y + 15;
-      ctx.lineTo(lollipop.anchorX, bendY);
+      // Calculate crank segments
+      const bottomOfDisc = lollipop.y + lollipop.radius;
+      const elbowTop = bottomOfDisc + 12;  // Upper vertical drops 12px below disc
+      const elbowBottom = Math.min(elbowTop + 25, baselineY - 5);  // Diagonal spans ~25px, but don't exceed baseline
 
-      // Diagonal to disc
-      ctx.lineTo(lollipop.x, lollipop.y);
+      // Upper vertical: from disc bottom down
+      ctx.moveTo(lollipop.x, bottomOfDisc);
+      ctx.lineTo(lollipop.x, elbowTop);
+
+      // Diagonal: from upper elbow to lower elbow (moving toward anchor)
+      ctx.lineTo(lollipop.anchorX, elbowBottom);
+
+      // Lower vertical: from lower elbow to baseline
+      ctx.lineTo(lollipop.anchorX, baselineY);
       ctx.stroke();
 
       // Draw disc

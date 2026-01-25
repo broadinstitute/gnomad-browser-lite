@@ -58,6 +58,20 @@ export function ProteinPaintTrack({
   // Track hovered lollipop
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
+  // Position overrides for dragged lollipops (id -> custom X coordinate)
+  const [positionOverrides, setPositionOverrides] = useState<Record<string, number>>({});
+
+  // Current drag state
+  const [dragState, setDragState] = useState<{
+    id: string;        // ID of lollipop being dragged
+    startX: number;    // Mouse X at start of drag
+    initialX: number;  // Lollipop X at start of drag
+    hasMoved: boolean; // To distinguish click vs drag
+  } | null>(null);
+
+  // Ref to track if a drag just occurred (since click fires after mouseUp)
+  const wasDraggingRef = useRef(false);
+
   // Filter variants based on intron visibility
   const filteredVariants = useMemo(() => {
     if (showIntrons || !exons || exons.length === 0) {
@@ -198,7 +212,8 @@ export function ProteinPaintTrack({
     for (const lollipop of expandedTiers) {
       const isHovered = lollipop.id === hoveredId;
       const isSelected = lollipop.isSelected;
-      const x = lollipop.x;
+      // Use override position if user has dragged this lollipop
+      const x = positionOverrides[lollipop.id] ?? lollipop.x;
 
       // Calculate stack bottom
       const stackBottom = lollipop.y + lollipop.stackHeight;
@@ -251,8 +266,9 @@ export function ProteinPaintTrack({
       const sameTier = expandedTiers.filter(l => l.layerId === lollipop.layerId);
       const tierIndex = sameTier.indexOf(lollipop);
       const nextLollipop = tierIndex < sameTier.length - 1 ? sameTier[tierIndex + 1] : null;
-      const spaceToNext = nextLollipop
-        ? nextLollipop.x - nextLollipop.radius - (x + lollipop.radius)
+      const nextX = nextLollipop ? (positionOverrides[nextLollipop.id] ?? nextLollipop.x) : null;
+      const spaceToNext = nextX !== null
+        ? nextX - nextLollipop!.radius - (x + lollipop.radius)
         : width - x - lollipop.radius;
 
       // Draw stacked discs (top to bottom) with optional horizontal labels for lower discs
@@ -331,9 +347,9 @@ export function ProteinPaintTrack({
     }
 
     ctx.globalAlpha = 1;
-  }, [lollipops, width, renderHeight, hoveredId]);
+  }, [lollipops, width, renderHeight, hoveredId, positionOverrides]);
 
-  // Handle mouse move for hover
+  // Handle mouse move for hover and dragging
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!containerRef.current) return;
@@ -342,11 +358,32 @@ export function ProteinPaintTrack({
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
+      // Handle dragging
+      if (dragState) {
+        const deltaX = mouseX - dragState.startX;
+        const newX = Math.max(0, Math.min(width, dragState.initialX + deltaX));
+
+        // Mark as moved if delta > threshold (3px)
+        const hasMoved = dragState.hasMoved || Math.abs(deltaX) > 3;
+        if (hasMoved && !dragState.hasMoved) {
+          setDragState({ ...dragState, hasMoved: true });
+        }
+
+        setPositionOverrides((prev) => ({
+          ...prev,
+          [dragState.id]: newX,
+        }));
+        return; // Don't update hover state while dragging
+      }
+
       // Find closest lollipop (check all discs in stack)
       let closest: { lollipop: LollipopData; discIndex: number; distance: number } | null = null;
 
       for (const lollipop of lollipopsRef.current) {
-        const lx = lollipop.isExpanded ? lollipop.x : lollipop.anchorX;
+        // Use current visual position (with override if exists)
+        const lx = lollipop.isExpanded
+          ? (positionOverrides[lollipop.id] ?? lollipop.x)
+          : lollipop.anchorX;
 
         // Check each disc in the stack
         for (let i = 0; i < lollipop.discs.length; i++) {
@@ -371,18 +408,82 @@ export function ProteinPaintTrack({
         onHover?.(null, mouseX, mouseY);
       }
     },
-    [onHover]
+    [onHover, dragState, positionOverrides, width]
   );
 
   const handleMouseLeave = useCallback(() => {
     setHoveredId(null);
     onHover?.(null, 0, 0);
+    // End any drag in progress
+    setDragState(null);
   }, [onHover]);
+
+  // Handle mouse down to start dragging
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!containerRef.current) return;
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      // Find closest lollipop (check all discs in stack)
+      let closest: { lollipop: LollipopData; distance: number } | null = null;
+
+      for (const lollipop of lollipopsRef.current) {
+        // Use current visual position (with override if exists)
+        const lx = lollipop.isExpanded
+          ? (positionOverrides[lollipop.id] ?? lollipop.x)
+          : lollipop.anchorX;
+
+        for (const disc of lollipop.discs) {
+          const discY = lollipop.y + disc.stackY + disc.radius;
+          const distance = Math.sqrt((lx - mouseX) ** 2 + (discY - mouseY) ** 2);
+          const hitRadius = disc.radius + 5;
+
+          if (distance < hitRadius && (!closest || distance < closest.distance)) {
+            closest = { lollipop, distance };
+          }
+        }
+      }
+
+      if (closest) {
+        // Stop propagation to prevent parent's drag-to-zoom from triggering
+        e.stopPropagation();
+
+        // Start dragging this lollipop
+        const currentX = positionOverrides[closest.lollipop.id] ?? closest.lollipop.x;
+        setDragState({
+          id: closest.lollipop.id,
+          startX: mouseX,
+          initialX: currentX,
+          hasMoved: false,
+        });
+      }
+    },
+    [positionOverrides]
+  );
+
+  // Handle mouse up to end dragging
+  const handleMouseUp = useCallback(() => {
+    // Track if we were dragging (for click handler)
+    wasDraggingRef.current = dragState?.hasMoved ?? false;
+    setDragState(null);
+    // Clear the flag after a brief delay (to catch the click event)
+    setTimeout(() => {
+      wasDraggingRef.current = false;
+    }, 0);
+  }, [dragState]);
 
   // Handle click to select/deselect variant
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!containerRef.current || !onVariantClick) return;
+
+      // Ignore click if we were dragging
+      if (wasDraggingRef.current) {
+        return;
+      }
 
       const rect = containerRef.current.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
@@ -392,7 +493,10 @@ export function ProteinPaintTrack({
       let closest: { lollipop: LollipopData; discIndex: number; distance: number } | null = null;
 
       for (const lollipop of lollipopsRef.current) {
-        const lx = lollipop.isExpanded ? lollipop.x : lollipop.anchorX;
+        // Use current visual position (with override if exists)
+        const lx = lollipop.isExpanded
+          ? (positionOverrides[lollipop.id] ?? lollipop.x)
+          : lollipop.anchorX;
 
         for (let i = 0; i < lollipop.discs.length; i++) {
           const disc = lollipop.discs[i];
@@ -415,14 +519,25 @@ export function ProteinPaintTrack({
         }
       }
     },
-    [onVariantClick]
+    [onVariantClick, positionOverrides]
   );
+
+  // Compute cursor style based on drag and hover state
+  const cursor = dragState
+    ? 'grabbing'
+    : hoveredId
+    ? 'grab'
+    : onVariantClick
+    ? 'pointer'
+    : 'crosshair';
 
   return (
     <div
       ref={containerRef}
-      style={{ position: 'relative', cursor: onVariantClick ? 'pointer' : 'crosshair' }}
+      style={{ position: 'relative', cursor }}
       onMouseMove={handleMouseMove}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
       onClick={onVariantClick ? handleClick : undefined}
     >

@@ -547,8 +547,7 @@ export function layoutLollipops(
     const nonSelectedExpanded = expandedItems.filter(l => !l.isSelected);
 
     if (selectedItems.length > 0 && nonSelectedExpanded.length > 0) {
-      const tierY = getTierPositions(height);
-      avoidStemCollisions(selectedItems, nonSelectedExpanded, tierY, height);
+      avoidStemCollisions(selectedItems, nonSelectedExpanded, width);
     }
   }
 }
@@ -560,8 +559,7 @@ export function layoutLollipops(
 function avoidStemCollisions(
   selectedLollipops: LollipopData[],
   topLollipops: LollipopData[],
-  _tierY: Record<string, number>,
-  _height: number
+  width: number
 ): void {
   if (selectedLollipops.length === 0 || topLollipops.length === 0) return;
 
@@ -600,7 +598,7 @@ function avoidStemCollisions(
   resolveDiscOverlaps(topLollipops);
 
   // Step 4: Re-resolve labels since positions changed
-  resolveLabelCollisions(topLollipops, 2000);
+  resolveLabelCollisions(topLollipops, width);
 }
 
 /**

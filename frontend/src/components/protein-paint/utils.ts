@@ -212,6 +212,54 @@ function parseHgvspLabel(hgvsp: string | undefined): string {
 }
 
 /**
+ * Parse hgvsc to extract short label for non-coding variants
+ * e.g., "c.1799T>A" -> "c.1799T>A", "c.100+1G>A" -> "c.100+1G>A"
+ */
+function parseHgvscLabel(hgvsc: string | undefined): string {
+  if (!hgvsc) return '';
+
+  // Strip transcript prefix if present (e.g., "ENST00000123456.1:c.100G>A" -> "c.100G>A")
+  const colonIdx = hgvsc.lastIndexOf(':');
+  const notation = colonIdx >= 0 ? hgvsc.slice(colonIdx + 1) : hgvsc;
+
+  // Return the c. notation as-is (it's already reasonably short)
+  return notation;
+}
+
+/**
+ * Get the best available HGVS key for grouping variants
+ * Prefers hgvsp for coding variants, falls back to hgvsc for non-coding
+ */
+function getHgvsKey(v: Variant): string {
+  // Use hgvsp if available and meaningful
+  if (v.hgvsp && v.hgvsp !== 'unknown') {
+    return v.hgvsp;
+  }
+  // Fall back to hgvsc for non-coding variants
+  if (v.hgvsc) {
+    return v.hgvsc;
+  }
+  return 'unknown';
+}
+
+/**
+ * Get the best available label for a variant
+ * Prefers hgvsp label for coding variants, falls back to hgvsc for non-coding
+ */
+function getVariantLabel(v: Variant): string {
+  // Use hgvsp if available
+  if (v.hgvsp) {
+    const label = parseHgvspLabel(v.hgvsp);
+    if (label) return label;
+  }
+  // Fall back to hgvsc for non-coding variants
+  if (v.hgvsc) {
+    return parseHgvscLabel(v.hgvsc);
+  }
+  return '';
+}
+
+/**
  * Estimate label width in pixels
  */
 function estimateLabelWidth(label: string): number {
@@ -248,17 +296,17 @@ export function createLollipops(
     positionMap.get(pos)!.push(variant);
   }
 
-  // Find max AF across all hgvsp groups for radius scaling
+  // Find max AF across all HGVS groups for radius scaling
   let maxAf = 0;
   for (const posVariants of positionMap.values()) {
-    // Group by hgvsp within this position and sum AF
-    const hgvspAfs = new Map<string, number>();
+    // Group by HGVS key within this position and sum AF
+    const hgvsAfs = new Map<string, number>();
     for (const v of posVariants) {
-      const hgvsp = v.hgvsp || 'unknown';
+      const key = getHgvsKey(v);
       const af = v.af || v.allele_freq || 0;
-      hgvspAfs.set(hgvsp, (hgvspAfs.get(hgvsp) || 0) + af);
+      hgvsAfs.set(key, (hgvsAfs.get(key) || 0) + af);
     }
-    for (const af of hgvspAfs.values()) {
+    for (const af of hgvsAfs.values()) {
       maxAf = Math.max(maxAf, af);
     }
   }
@@ -267,28 +315,29 @@ export function createLollipops(
   const lollipops: LollipopData[] = [];
 
   for (const [pos, posVariants] of positionMap) {
-    // Group variants by hgvsp at this position
-    const hgvspMap = new Map<string, Variant[]>();
+    // Group variants by HGVS key (hgvsp if coding, hgvsc if non-coding)
+    const hgvsMap = new Map<string, Variant[]>();
     for (const v of posVariants) {
-      const hgvsp = v.hgvsp || 'unknown';
-      if (!hgvspMap.has(hgvsp)) {
-        hgvspMap.set(hgvsp, []);
+      const key = getHgvsKey(v);
+      if (!hgvsMap.has(key)) {
+        hgvsMap.set(key, []);
       }
-      hgvspMap.get(hgvsp)!.push(v);
+      hgvsMap.get(key)!.push(v);
     }
 
-    // Create a disc for each unique hgvsp
+    // Create a disc for each unique HGVS entry
     const discs: StackedDisc[] = [];
-    for (const [hgvsp, hgvspVariants] of hgvspMap) {
-      const count = hgvspVariants.length;
-      const label = parseHgvspLabel(hgvsp);
+    for (const [hgvsKey, hgvsVariants] of hgvsMap) {
+      const count = hgvsVariants.length;
+      // Use the first variant to get the best label (hgvsp preferred, fallback to hgvsc)
+      const label = getVariantLabel(hgvsVariants[0]);
 
       // Determine color, priority, and sum AF from variants in this group
       let color = '#757575';
       let priority = 0;
       let totalAC = 0;
       let totalAF = 0;
-      for (const v of hgvspVariants) {
+      for (const v of hgvsVariants) {
         const p = getConsequencePriority(v.consequence || '');
         if (p > priority) {
           priority = p;
@@ -302,9 +351,9 @@ export function createLollipops(
       const effectivePriority = priority * 1000 + Math.min(totalAC, 500);
 
       discs.push({
-        hgvsp,
+        hgvsp: hgvsKey,  // Store the HGVS key (could be hgvsp or hgvsc)
         label,
-        variants: hgvspVariants,
+        variants: hgvsVariants,
         count,
         radius: calculateDiscRadius(totalAF, maxAf, params),
         color,

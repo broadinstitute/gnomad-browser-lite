@@ -19,7 +19,7 @@ import {
   layoutLollipops,
   getStandardLayers,
   createSelectionLayer,
-  getTierPositions,
+  calculateRequiredHeight,
 } from './utils';
 import { getVariantPosition, isInExonRegion } from '../variantUtils';
 
@@ -66,9 +66,9 @@ export function ProteinPaintTrack({
     return variants.filter((v) => isInExonRegion(getVariantPosition(v), exons));
   }, [variants, exons, showIntrons]);
 
-  // Memoize layer configuration
+  // Memoize layer configuration (no longer depends on height)
   const layers = useMemo(() => {
-    const baseLayers = customLayers || getStandardLayers(height);
+    const baseLayers = customLayers || getStandardLayers();
 
     // If there are selected variants, prepend selection layer
     if (selectedIds && selectedIds.size > 0) {
@@ -80,16 +80,25 @@ export function ProteinPaintTrack({
     }
 
     return baseLayers;
-  }, [height, customLayers, selectedIds]);
+  }, [customLayers, selectedIds]);
 
-  // Create and layout lollipops using layer configuration
-  const lollipops = useMemo(() => {
-    const params = getLayoutParams(height);
+  // Create and layout lollipops, then calculate required height
+  const { lollipops, effectiveHeight } = useMemo(() => {
+    // Use a large initial height for layout params (bottomTierY calculation)
+    const maxHeight = 300;
+    const params = getLayoutParams(maxHeight);
     params.selectedIds = selectedIds;
     const data = createLollipops(filteredVariants, scale, params, layers);
     layoutLollipops(data, width, params, layers);
-    return data;
-  }, [filteredVariants, scale, width, height, selectedIds, layers]);
+
+    // Calculate the actual required height based on which layers have data
+    const requiredHeight = calculateRequiredHeight(data);
+
+    return { lollipops: data, effectiveHeight: requiredHeight };
+  }, [filteredVariants, scale, width, selectedIds, layers]);
+
+  // Use effective height for rendering (ignore the prop if we have data)
+  const renderHeight = lollipops.length > 0 ? effectiveHeight : height;
 
   // Store for hit detection
   lollipopsRef.current = lollipops;
@@ -105,13 +114,13 @@ export function ProteinPaintTrack({
     // Handle high-DPI displays
     const dpr = window.devicePixelRatio || 1;
     canvas.width = width * dpr;
-    canvas.height = height * dpr;
+    canvas.height = renderHeight * dpr;
     ctx.scale(dpr, dpr);
 
-    const baselineY = height - 25; // Stems end above the gene track
+    const baselineY = renderHeight - 25; // Stems end above the gene track
 
     // Clear canvas
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, width, renderHeight);
 
     // Separate lollipops by expansion type
     const expandedTiers = lollipops.filter(l => l.isExpanded);
@@ -131,9 +140,15 @@ export function ProteinPaintTrack({
       : 0;
 
     // Find the top of the first non-expanded tier (for knee positioning)
+    // If no condensed tiers, use a position that allows proper crankshaft geometry
     const firstCondensedY = regularTiers.length > 0
-      ? Math.min(...regularTiers.map(l => l.y)) - 20
-      : baselineY - 50;
+      ? Math.min(...regularTiers.map(l => l.y)) - 15
+      : baselineY - 60;
+
+    // Minimum lengths for crankshaft segments
+    const MIN_UPPER_VERTICAL = 20;   // Disc to upper knee
+    const MIN_DIAGONAL_HEIGHT = 40;  // Upper knee to lower knee (vertical component)
+    const MIN_LOWER_VERTICAL = 25;   // Lower knee to baseline
 
     // Draw regular (non-expanded) tiers first (simple straight stems with stacked discs)
     for (const lollipop of regularTiers) {
@@ -196,26 +211,29 @@ export function ProteinPaintTrack({
       ctx.beginPath();
 
       // Calculate crank segments based on layer type
-      // The upper knee is just below this tier's stack
-      // The lower knee is above the next tier
+      // Structure: Disc -> Upper Vertical -> Upper Knee -> Diagonal -> Lower Knee -> Lower Vertical -> Baseline
       let upperKnee: number;
       let lowerKnee: number;
 
       if (lollipop.layerId === 'selected') {
         // Selected layer: keep stem VERTICAL through the top expanded tier region
         // Upper knee is BELOW the top expanded tier (after passing through it vertically)
-        // This ensures selected stems don't cross top tier labels
-        const topTierLowerKnee = topExpandedTierBottom < firstCondensedY
-          ? Math.min(topExpandedTierBottom + 15, firstCondensedY)
-          : topExpandedTierBottom + 8;
-        upperKnee = topTierLowerKnee;  // Start diagonal BELOW top expanded tier
-        lowerKnee = topTierLowerKnee + 20;  // Short diagonal segment
+        const topTierLowerKnee = topExpandedTierBottom > 0
+          ? topExpandedTierBottom + MIN_UPPER_VERTICAL
+          : stackBottom + MIN_UPPER_VERTICAL;
+        upperKnee = topTierLowerKnee;
+        lowerKnee = Math.min(upperKnee + MIN_DIAGONAL_HEIGHT, baselineY - MIN_LOWER_VERTICAL);
       } else {
-        // Other expanded layers: crank above the first condensed tier
-        upperKnee = stackBottom + 3;
-        lowerKnee = upperKnee < firstCondensedY
-          ? Math.min(upperKnee + 15, firstCondensedY)
-          : upperKnee + 8;
+        // Other expanded layers: ensure proper crankshaft geometry
+        // Upper knee: below the disc stack with minimum vertical segment
+        upperKnee = stackBottom + MIN_UPPER_VERTICAL;
+
+        // Lower knee: ensure minimum diagonal height, but stay above baseline
+        const idealLowerKnee = upperKnee + MIN_DIAGONAL_HEIGHT;
+        const maxLowerKnee = baselineY - MIN_LOWER_VERTICAL;
+
+        // Lower knee must be below upper knee (diagonal goes down, not up)
+        lowerKnee = Math.max(upperKnee + 10, Math.min(idealLowerKnee, maxLowerKnee));
       }
 
       // Upper vertical: from stack bottom down to upper knee
@@ -313,7 +331,7 @@ export function ProteinPaintTrack({
     }
 
     ctx.globalAlpha = 1;
-  }, [lollipops, width, height, hoveredId]);
+  }, [lollipops, width, renderHeight, hoveredId]);
 
   // Handle mouse move for hover
   const handleMouseMove = useCallback(
@@ -409,11 +427,12 @@ export function ProteinPaintTrack({
       onClick={onVariantClick ? handleClick : undefined}
     >
       <canvas
+        key={`canvas-${width}-${renderHeight}`}
         ref={canvasRef}
         style={{
           display: 'block',
-          width: width,
-          height: height,
+          width: `${width}px`,
+          height: `${renderHeight}px`,
         }}
       />
     </div>

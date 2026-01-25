@@ -19,18 +19,37 @@ import {
   getConsequencePriority,
 } from '../variantUtils';
 
+/** Fixed Y positions for each layer (used for consistent spacing) */
+export const LAYER_Y_POSITIONS = {
+  selected: 40,
+  lof: 60,
+  missense: 130,
+  synonymous: 175,
+  noncoding: 205,
+} as const;
+
+/** Spacing between the lowest layer and the baseline */
+const BASELINE_PADDING = 35;
+
+/**
+ * Minimum height for proper crankshaft rendering
+ * Accounts for: top tier Y (60) + stack (~30) + upper vertical (20) + diagonal (40) + lower vertical (25) + padding
+ */
+const MIN_HEIGHT_FOR_CRANKSHAFT = 185;
+
 /**
  * Create standard layer configuration that reproduces current gnomAD behavior
  * This is the factory function for the default layer setup
+ * Note: Y positions are now fixed values, not percentages
  */
-export function getStandardLayers(height: number): LayerDefinition[] {
+export function getStandardLayers(_height?: number): LayerDefinition[] {
   return [
     {
       id: 'lof',
       label: 'Loss of Function',
       filter: (variants) => variants.some(v => getConsequencePriority(v.consequence || '') >= 4),
       color: '#dd3333',
-      y: 60,
+      y: LAYER_Y_POSITIONS.lof,
       layout: 'expanded',
       zOrder: 40,
     },
@@ -39,7 +58,7 @@ export function getStandardLayers(height: number): LayerDefinition[] {
       label: 'Missense',
       filter: (variants) => variants.some(v => getConsequencePriority(v.consequence || '') === 3),
       color: '#f59e0b',
-      y: height * 0.55,
+      y: LAYER_Y_POSITIONS.missense,
       layout: 'condensed',
       zOrder: 30,
     },
@@ -48,7 +67,7 @@ export function getStandardLayers(height: number): LayerDefinition[] {
       label: 'Synonymous',
       filter: (variants) => variants.some(v => getConsequencePriority(v.consequence || '') === 2),
       color: '#22c55e',
-      y: height * 0.72,
+      y: LAYER_Y_POSITIONS.synonymous,
       layout: 'condensed',
       zOrder: 20,
     },
@@ -57,11 +76,36 @@ export function getStandardLayers(height: number): LayerDefinition[] {
       label: 'Non-coding',
       filter: () => true, // Catch-all for remaining variants
       color: '#757575',
-      y: height * 0.85,
+      y: LAYER_Y_POSITIONS.noncoding,
       layout: 'condensed',
       zOrder: 10,
     },
   ];
+}
+
+/**
+ * Calculate the minimum required height based on which layers have variants
+ * Returns the Y position of the lowest occupied layer + padding for baseline
+ * Ensures minimum height for proper crankshaft rendering when expanded tiers exist
+ */
+export function calculateRequiredHeight(lollipops: LollipopData[]): number {
+  if (lollipops.length === 0) return 120; // Minimum height
+
+  // Check if any lollipop uses expanded layout (needs crankshaft space)
+  const hasExpandedTier = lollipops.some(l => l.isExpanded);
+
+  // Find the maximum Y position among all lollipops (accounting for stack height)
+  const maxY = Math.max(...lollipops.map(l => l.y + l.stackHeight));
+
+  // Calculate height based on content
+  const contentHeight = maxY + BASELINE_PADDING;
+
+  // If we have expanded tiers, ensure minimum height for proper crankshaft geometry
+  if (hasExpandedTier) {
+    return Math.max(MIN_HEIGHT_FOR_CRANKSHAFT, contentHeight);
+  }
+
+  return Math.max(120, contentHeight);
 }
 
 /**

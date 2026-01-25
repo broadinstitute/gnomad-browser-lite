@@ -179,12 +179,14 @@ export function ProteinPaintTrack({
       let lowerKnee: number;
 
       if (lollipop.tier === 'selected') {
-        // Selected tier: crank above LoF (or missense if no LoF)
-        upperKnee = selectedTierBottom;
-        const nextTierTop = lofTier.length > 0 ? lofTop : missenseTop;
-        lowerKnee = upperKnee < nextTierTop
-          ? Math.min(upperKnee + 15, nextTierTop)
-          : upperKnee + 8;
+        // Selected tier: upper knee below selected disc, lower knee stays at LoF position
+        // This creates a longer diagonal from the elevated disc down to where LoF's crank would be
+        upperKnee = selectedTierBottom + 12;  // Add visible vertical segment below disc
+        // Lower knee stays at the same position as LoF tier's lower knee
+        const lofLowerKnee = lofTierBottom < missenseTop
+          ? Math.min(lofTierBottom + 15, missenseTop)
+          : lofTierBottom + 8;
+        lowerKnee = lofLowerKnee;
       } else {
         // LoF tier: crank above missense
         upperKnee = lofTierBottom;

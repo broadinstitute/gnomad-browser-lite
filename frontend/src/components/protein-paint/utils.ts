@@ -290,7 +290,7 @@ export function getTierPositions(height: number): Record<string, number> {
 /**
  * Assign lollipops to tiers based on consequence and selection
  * The highest-severity tier present becomes the "top tier" with spread layout
- * Selected variants always go to the 'selected' tier (highest priority)
+ * Selected variants get elevated but keep their spread X position from their consequence tier
  */
 export function layoutLollipops(
   lollipops: LollipopData[],
@@ -304,9 +304,10 @@ export function layoutLollipops(
   const tierY = getTierPositions(height);
   const selectedIds = params.selectedIds || new Set<string>();
 
-  // Group by tier - including selected tier
+  // First pass: assign consequence-based tiers to ALL lollipops (ignoring selection)
+  // This lets us run the spread layout for consequence tiers first
   const tierOrder: TierName[] = ['selected', 'lof', 'missense', 'synonymous', 'noncoding'];
-  const tiers: Record<TierName, LollipopData[]> = {
+  const consequenceTiers: Record<TierName, LollipopData[]> = {
     selected: [],
     lof: [],
     missense: [],
@@ -314,60 +315,68 @@ export function layoutLollipops(
     noncoding: [],
   };
 
-  // Assign each lollipop to a tier
   for (const lollipop of lollipops) {
-    // Check if any variant at this position is selected
     const isSelected = lollipop.variants.some(v => selectedIds.has(v.variant_id || ''));
     lollipop.isSelected = isSelected;
 
-    // Determine tier: selected variants go to 'selected' tier, others by consequence
-    let tier: TierName;
-    if (isSelected) {
-      tier = 'selected';
-    } else {
-      tier = getTierFromPriority(lollipop.priority);
-    }
+    // Always assign by consequence first (for layout purposes)
+    const consequenceTier = getTierFromPriority(lollipop.priority);
+    consequenceTiers[consequenceTier].push(lollipop);
 
-    lollipop.tier = tier;
-    lollipop.y = tierY[tier];
-    lollipop.isExpanded = tierConfig[tier].expanded;
-    tiers[tier].push(lollipop);
+    // Store the consequence tier for reference
+    lollipop.tier = consequenceTier;
+    lollipop.y = tierY[consequenceTier];
+    lollipop.isExpanded = tierConfig[consequenceTier].expanded;
   }
 
-  // Find the highest-severity non-selected tier that has variants
-  // This becomes the "dynamic top tier" that also gets expanded layout
+  // Find the highest-severity tier that has variants (dynamic top tier)
   let dynamicTopTier: TierName | null = null;
   for (const tier of tierOrder) {
-    if (tier !== 'selected' && tiers[tier].length > 0) {
+    if (tier !== 'selected' && consequenceTiers[tier].length > 0) {
       dynamicTopTier = tier;
       break;
     }
   }
 
-  // If there's no selected tier but we have a dynamic top tier, make it expanded
-  if (dynamicTopTier && tiers.selected.length === 0) {
-    for (const lollipop of tiers[dynamicTopTier]) {
+  // Mark expanded status for the dynamic top tier
+  if (dynamicTopTier) {
+    for (const lollipop of consequenceTiers[dynamicTopTier]) {
       lollipop.isExpanded = true;
     }
   }
 
-  // Mark isTopTier for backward compatibility (first expanded tier with items)
+  // Run spread layout on the dynamic top tier (includes selected variants at their consequence tier)
+  if (dynamicTopTier && consequenceTiers[dynamicTopTier].length > 0) {
+    runTopTierForceLayout(consequenceTiers[dynamicTopTier], width, params);
+  }
+
+  // Apply opportunistic horizontal labels to lower tiers
+  for (const tier of tierOrder) {
+    if (tier !== 'selected' && tier !== dynamicTopTier && consequenceTiers[tier].length > 0) {
+      resolveHorizontalLabels(consequenceTiers[tier], width);
+    }
+  }
+
+  // Second pass: elevate selected variants to selected tier
+  // They keep their X position from the spread layout, but get elevated Y
+  for (const lollipop of lollipops) {
+    if (lollipop.isSelected) {
+      lollipop.tier = 'selected';
+      lollipop.y = tierY.selected;
+      lollipop.isExpanded = true;
+      // x position is preserved from the spread layout above
+    }
+  }
+
+  // Mark isTopTier for backward compatibility
   for (const lollipop of lollipops) {
     lollipop.isTopTier = lollipop.isExpanded;
   }
 
-  // Apply spread layout to each expanded tier
-  for (const tier of tierOrder) {
-    if (tiers[tier].length > 0 && tierConfig[tier].expanded) {
-      runTopTierForceLayout(tiers[tier], width, params);
-    }
-  }
-
-  // Apply opportunistic horizontal labels to lower (non-expanded) tiers
-  for (const tier of tierOrder) {
-    if (tiers[tier].length > 0 && !tierConfig[tier].expanded) {
-      resolveHorizontalLabels(tiers[tier], width);
-    }
+  // Resolve labels for selected tier (they already have X positions)
+  const selectedLollipops = lollipops.filter(l => l.isSelected);
+  if (selectedLollipops.length > 0) {
+    resolveLabelCollisions(selectedLollipops, width);
   }
 }
 

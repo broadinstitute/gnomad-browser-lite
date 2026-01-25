@@ -12,7 +12,7 @@
 
 import { forceSimulation, forceX, forceCollide } from 'd3-force';
 import type { Variant } from '../../api/types';
-import type { LollipopData, LayoutParams, StackedDisc } from './types';
+import type { LollipopData, LayoutParams, StackedDisc, TierName, TierConfig } from './types';
 import {
   getVariantPosition,
   getVariantColor,
@@ -238,6 +238,9 @@ export function createLollipops(
       isTopTier: false,
       showLabel: false,
       labelAngle: 0,  // Will be set during layout
+      tier: 'noncoding',  // Will be set during layout
+      isExpanded: false,  // Will be set during layout
+      isSelected: false,  // Will be set during layout
     });
   }
 
@@ -245,10 +248,24 @@ export function createLollipops(
 }
 
 /**
+ * Tier configuration - defines Y positions and layout behavior
+ * Selected tier is dynamically inserted above the highest-priority present tier
+ */
+export function getTierConfig(height: number): Record<TierName, TierConfig> {
+  return {
+    selected: { y: 40, expanded: true, basePriority: 10000 },  // User-selected always on top
+    lof: { y: 60, expanded: true, basePriority: 4000 },
+    missense: { y: height * 0.55, expanded: false, basePriority: 3000 },
+    synonymous: { y: height * 0.72, expanded: false, basePriority: 2000 },
+    noncoding: { y: height * 0.85, expanded: false, basePriority: 1000 },
+  };
+}
+
+/**
  * Get tier based on consequence priority
  * Returns: 'lof' | 'missense' | 'synonymous' | 'noncoding'
  */
-function getTier(priority: number): 'lof' | 'missense' | 'synonymous' | 'noncoding' {
+function getTierFromPriority(priority: number): TierName {
   const consequencePriority = Math.floor(priority / 1000);
   if (consequencePriority >= 4) return 'lof';
   if (consequencePriority === 3) return 'missense';
@@ -260,17 +277,20 @@ function getTier(priority: number): 'lof' | 'missense' | 'synonymous' | 'noncodi
  * Get tier Y positions for a given height
  */
 export function getTierPositions(height: number): Record<string, number> {
+  const config = getTierConfig(height);
   return {
-    lof: 60,                    // Top - LoF with labels (raised higher)
-    missense: height * 0.55,    // Upper middle (pushed down for crank room)
-    synonymous: height * 0.72,  // Lower middle
-    noncoding: height * 0.85,   // Near bottom (above gene)
+    selected: config.selected.y,
+    lof: config.lof.y,
+    missense: config.missense.y,
+    synonymous: config.synonymous.y,
+    noncoding: config.noncoding.y,
   };
 }
 
 /**
- * Assign lollipops to tiers based on consequence
+ * Assign lollipops to tiers based on consequence and selection
  * The highest-severity tier present becomes the "top tier" with spread layout
+ * Selected variants always go to the 'selected' tier (highest priority)
  */
 export function layoutLollipops(
   lollipops: LollipopData[],
@@ -280,46 +300,72 @@ export function layoutLollipops(
   if (lollipops.length === 0) return;
 
   const height = params.bottomTierY + 15; // Approximate total height
+  const tierConfig = getTierConfig(height);
   const tierY = getTierPositions(height);
+  const selectedIds = params.selectedIds || new Set<string>();
 
-  // Group by tier
-  const tierOrder = ['lof', 'missense', 'synonymous', 'noncoding'] as const;
-  const tiers: Record<string, LollipopData[]> = {
+  // Group by tier - including selected tier
+  const tierOrder: TierName[] = ['selected', 'lof', 'missense', 'synonymous', 'noncoding'];
+  const tiers: Record<TierName, LollipopData[]> = {
+    selected: [],
     lof: [],
     missense: [],
     synonymous: [],
     noncoding: [],
   };
 
+  // Assign each lollipop to a tier
   for (const lollipop of lollipops) {
-    const tier = getTier(lollipop.priority);
-    tiers[tier].push(lollipop);
+    // Check if any variant at this position is selected
+    const isSelected = lollipop.variants.some(v => selectedIds.has(v.variant_id || ''));
+    lollipop.isSelected = isSelected;
+
+    // Determine tier: selected variants go to 'selected' tier, others by consequence
+    let tier: TierName;
+    if (isSelected) {
+      tier = 'selected';
+    } else {
+      tier = getTierFromPriority(lollipop.priority);
+    }
+
+    lollipop.tier = tier;
     lollipop.y = tierY[tier];
+    lollipop.isExpanded = tierConfig[tier].expanded;
+    tiers[tier].push(lollipop);
   }
 
-  // Find the highest-severity tier that has variants (becomes top tier)
-  let topTierName: string | null = null;
+  // Find the highest-severity non-selected tier that has variants
+  // This becomes the "dynamic top tier" that also gets expanded layout
+  let dynamicTopTier: TierName | null = null;
   for (const tier of tierOrder) {
-    if (tiers[tier].length > 0) {
-      topTierName = tier;
+    if (tier !== 'selected' && tiers[tier].length > 0) {
+      dynamicTopTier = tier;
       break;
     }
   }
 
-  // Mark top tier variants and apply spread layout
+  // If there's no selected tier but we have a dynamic top tier, make it expanded
+  if (dynamicTopTier && tiers.selected.length === 0) {
+    for (const lollipop of tiers[dynamicTopTier]) {
+      lollipop.isExpanded = true;
+    }
+  }
+
+  // Mark isTopTier for backward compatibility (first expanded tier with items)
   for (const lollipop of lollipops) {
-    const tier = getTier(lollipop.priority);
-    lollipop.isTopTier = tier === topTierName;
+    lollipop.isTopTier = lollipop.isExpanded;
   }
 
-  // Apply spread layout to top tier
-  if (topTierName && tiers[topTierName].length > 0) {
-    runTopTierForceLayout(tiers[topTierName], width, params);
-  }
-
-  // Apply opportunistic horizontal labels to lower tiers
+  // Apply spread layout to each expanded tier
   for (const tier of tierOrder) {
-    if (tier !== topTierName && tiers[tier].length > 0) {
+    if (tiers[tier].length > 0 && tierConfig[tier].expanded) {
+      runTopTierForceLayout(tiers[tier], width, params);
+    }
+  }
+
+  // Apply opportunistic horizontal labels to lower (non-expanded) tiers
+  for (const tier of tierOrder) {
+    if (tiers[tier].length > 0 && !tierConfig[tier].expanded) {
       resolveHorizontalLabels(tiers[tier], width);
     }
   }

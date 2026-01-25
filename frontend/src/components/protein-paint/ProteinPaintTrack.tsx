@@ -24,6 +24,10 @@ interface ProteinPaintTrackProps {
   exons?: Exon[];
   showIntrons: boolean;
   onHover?: (variant: Variant | null, x: number, y: number) => void;
+  /** Set of selected variant IDs */
+  selectedIds?: Set<string>;
+  /** Callback when a variant is clicked (toggles selection) */
+  onVariantClick?: (variantId: string) => void;
 }
 
 export function ProteinPaintTrack({
@@ -34,6 +38,8 @@ export function ProteinPaintTrack({
   exons,
   showIntrons,
   onHover,
+  selectedIds,
+  onVariantClick,
 }: ProteinPaintTrackProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -53,10 +59,11 @@ export function ProteinPaintTrack({
   // Create and layout lollipops
   const lollipops = useMemo(() => {
     const params = getLayoutParams(height);
+    params.selectedIds = selectedIds;
     const data = createLollipops(filteredVariants, scale, params);
     layoutLollipops(data, width, params);
     return data;
-  }, [filteredVariants, scale, width, height]);
+  }, [filteredVariants, scale, width, height, selectedIds]);
 
   // Store for hit detection
   lollipopsRef.current = lollipops;
@@ -80,24 +87,33 @@ export function ProteinPaintTrack({
     // Clear canvas
     ctx.clearRect(0, 0, width, height);
 
-    // Separate lollipops by tier
-    const lofTier = lollipops.filter(l => l.isTopTier);
-    const otherTiers = lollipops.filter(l => !l.isTopTier);
+    // Separate lollipops by expansion type
+    const expandedTiers = lollipops.filter(l => l.isExpanded);
+    const regularTiers = lollipops.filter(l => !l.isExpanded);
 
     // Get tier positions for layer-aware crank stems
     const tierPositions = getTierPositions(height);
 
-    // Calculate the bottom of all LoF disc stacks to ensure stems don't cross over discs
+    // Group expanded tiers by tier name for calculating knee positions
+    const selectedTier = expandedTiers.filter(l => l.tier === 'selected');
+    const lofTier = expandedTiers.filter(l => l.tier === 'lof');
+
+    // Calculate bottom of each expanded tier for crank positioning
+    const selectedTierBottom = selectedTier.length > 0
+      ? Math.max(...selectedTier.map(l => l.y + l.stackHeight)) + 3
+      : 0;
     const lofTierBottom = lofTier.length > 0
-      ? Math.max(...lofTier.map(l => l.y + l.stackHeight)) + 3  // Small gap below lowest stack
+      ? Math.max(...lofTier.map(l => l.y + l.stackHeight)) + 3
       : 0;
 
-    // The lower knee of the crank must be ABOVE the missense layer
-    // This ensures the diagonal happens in the gap between LoF and missense
-    const missenseTop = tierPositions.missense - 20;  // More margin above missense discs
+    // The lower knee of the crank must be ABOVE the next layer
+    // For selected tier: knee above LoF tier (or missense if no LoF)
+    // For LoF tier: knee above missense layer
+    const missenseTop = tierPositions.missense - 20;
+    const lofTop = tierPositions.lof - 10;
 
-    // Draw non-LoF tiers first (simple straight stems with stacked discs)
-    for (const lollipop of otherTiers) {
+    // Draw regular (non-expanded) tiers first (simple straight stems with stacked discs)
+    for (const lollipop of regularTiers) {
       const isHovered = lollipop.id === hoveredId;
       const x = lollipop.anchorX;
 
@@ -140,9 +156,10 @@ export function ProteinPaintTrack({
       }
     }
 
-    // Draw LoF tier (crank/dog-leg stems with stacked discs and labels)
-    for (const lollipop of lofTier) {
+    // Draw expanded tiers (crank/dog-leg stems with stacked discs and labels)
+    for (const lollipop of expandedTiers) {
       const isHovered = lollipop.id === hoveredId;
+      const isSelected = lollipop.isSelected;
       const x = lollipop.x;
 
       // Calculate stack bottom
@@ -150,18 +167,31 @@ export function ProteinPaintTrack({
 
       // Draw stem with crank/dog-leg style:
       // Upper vertical -> Diagonal -> Lower vertical
-      // The diagonal happens in the gap between LoF and missense tiers
-      ctx.strokeStyle = '#999';
-      ctx.lineWidth = 1;
+      // The diagonal happens in the gap between tiers
+      ctx.strokeStyle = isSelected ? '#1976d2' : '#999';
+      ctx.lineWidth = isSelected ? 1.5 : 1;
       ctx.beginPath();
 
-      // Calculate crank segments - keep diagonal tight and high
-      const upperKnee = lofTierBottom;
-      // Lower knee should be below upper knee AND above missense
-      // Keep diagonal short (15px) to stay high on the canvas
-      const lowerKnee = upperKnee < missenseTop
-        ? Math.min(upperKnee + 15, missenseTop)  // Normal case: short diagonal in gap
-        : upperKnee + 8;  // Tight case: minimal diagonal
+      // Calculate crank segments based on tier
+      // The upper knee is just below this tier's stack
+      // The lower knee is above the next tier
+      let upperKnee: number;
+      let lowerKnee: number;
+
+      if (lollipop.tier === 'selected') {
+        // Selected tier: crank above LoF (or missense if no LoF)
+        upperKnee = selectedTierBottom;
+        const nextTierTop = lofTier.length > 0 ? lofTop : missenseTop;
+        lowerKnee = upperKnee < nextTierTop
+          ? Math.min(upperKnee + 15, nextTierTop)
+          : upperKnee + 8;
+      } else {
+        // LoF tier: crank above missense
+        upperKnee = lofTierBottom;
+        lowerKnee = upperKnee < missenseTop
+          ? Math.min(upperKnee + 15, missenseTop)
+          : upperKnee + 8;
+      }
 
       // Upper vertical: from stack bottom down to upper knee
       ctx.moveTo(x, stackBottom);
@@ -174,9 +204,10 @@ export function ProteinPaintTrack({
       ctx.lineTo(lollipop.anchorX, baselineY);
       ctx.stroke();
 
-      // Find next lollipop to check horizontal space for secondary labels
-      const lofIndex = lofTier.indexOf(lollipop);
-      const nextLollipop = lofIndex < lofTier.length - 1 ? lofTier[lofIndex + 1] : null;
+      // Find next lollipop in same tier to check horizontal space for secondary labels
+      const sameTier = expandedTiers.filter(l => l.tier === lollipop.tier);
+      const tierIndex = sameTier.indexOf(lollipop);
+      const nextLollipop = tierIndex < sameTier.length - 1 ? sameTier[tierIndex + 1] : null;
       const spaceToNext = nextLollipop
         ? nextLollipop.x - nextLollipop.radius - (x + lollipop.radius)
         : width - x - lollipop.radius;
@@ -192,9 +223,17 @@ export function ProteinPaintTrack({
         ctx.arc(x, discY, disc.radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // Border
-        ctx.strokeStyle = isHovered ? '#000' : 'rgba(0,0,0,0.3)';
-        ctx.lineWidth = isHovered ? 2 : 1;
+        // Border - highlight selected variants with blue border
+        if (isSelected) {
+          ctx.strokeStyle = '#1976d2';
+          ctx.lineWidth = 2.5;
+        } else if (isHovered) {
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 2;
+        } else {
+          ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+          ctx.lineWidth = 1;
+        }
         ctx.stroke();
 
         // For lower discs in allelic series: show horizontal label if space available
@@ -264,7 +303,7 @@ export function ProteinPaintTrack({
       let closest: { lollipop: LollipopData; discIndex: number; distance: number } | null = null;
 
       for (const lollipop of lollipopsRef.current) {
-        const lx = lollipop.isTopTier ? lollipop.x : lollipop.anchorX;
+        const lx = lollipop.isExpanded ? lollipop.x : lollipop.anchorX;
 
         // Check each disc in the stack
         for (let i = 0; i < lollipop.discs.length; i++) {
@@ -297,12 +336,52 @@ export function ProteinPaintTrack({
     onHover?.(null, 0, 0);
   }, [onHover]);
 
+  // Handle click to select/deselect variant
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!containerRef.current || !onVariantClick) return;
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      // Find closest lollipop (check all discs in stack)
+      let closest: { lollipop: LollipopData; discIndex: number; distance: number } | null = null;
+
+      for (const lollipop of lollipopsRef.current) {
+        const lx = lollipop.isExpanded ? lollipop.x : lollipop.anchorX;
+
+        for (let i = 0; i < lollipop.discs.length; i++) {
+          const disc = lollipop.discs[i];
+          const discY = lollipop.y + disc.stackY + disc.radius;
+          const distance = Math.sqrt((lx - mouseX) ** 2 + (discY - mouseY) ** 2);
+          const hitRadius = disc.radius + 5;
+
+          if (distance < hitRadius && (!closest || distance < closest.distance)) {
+            closest = { lollipop, discIndex: i, distance };
+          }
+        }
+      }
+
+      if (closest) {
+        // Get the first variant from the clicked disc
+        const clickedDisc = closest.lollipop.discs[closest.discIndex];
+        const variantId = clickedDisc.variants[0]?.variant_id;
+        if (variantId) {
+          onVariantClick(variantId);
+        }
+      }
+    },
+    [onVariantClick]
+  );
+
   return (
     <div
       ref={containerRef}
-      style={{ position: 'relative', cursor: 'crosshair' }}
+      style={{ position: 'relative', cursor: onVariantClick ? 'pointer' : 'crosshair' }}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
+      onClick={onVariantClick ? handleClick : undefined}
     >
       <canvas
         ref={canvasRef}

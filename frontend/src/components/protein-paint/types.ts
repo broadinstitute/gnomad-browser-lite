@@ -95,6 +95,32 @@ export interface LollipopData {
 
   /** Label rotation angle in degrees (0 = horizontal, -45 = diagonal, -90 = vertical) */
   labelAngle: number;
+
+  /** The tier this lollipop belongs to */
+  tier: TierName;
+
+  /** Whether this tier uses expanded/crank layout */
+  isExpanded: boolean;
+
+  /** Whether this variant is user-selected */
+  isSelected: boolean;
+}
+
+/**
+ * Tier names for variant classification
+ */
+export type TierName = 'selected' | 'lof' | 'missense' | 'synonymous' | 'noncoding';
+
+/**
+ * Tier configuration with Y positions and layout behavior
+ */
+export interface TierConfig {
+  /** Y position for this tier */
+  y: number;
+  /** Whether this tier gets spread/crank layout (vs straight stems) */
+  expanded: boolean;
+  /** Base priority for tier ordering */
+  basePriority: number;
 }
 
 /**
@@ -115,6 +141,9 @@ export interface LayoutParams {
 
   /** Y position for top tier */
   topTierY: number;
+
+  /** Set of selected variant IDs (for user selection tier) */
+  selectedIds?: Set<string>;
 }
 
 // Keep old types for compatibility during transition

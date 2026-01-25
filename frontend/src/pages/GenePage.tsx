@@ -117,6 +117,7 @@ export function GenePage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<VariantFilter>(DEFAULT_VARIANT_FILTER);
   const [showIntrons, setShowIntrons] = useState(false); // Default: hide introns
+  const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
 
   // Parse zoom region from URL params
   const zoomRegion = useMemo(() => {
@@ -147,6 +148,24 @@ export function GenePage() {
   const handleResetZoom = useCallback(() => {
     setSearchParams({});
   }, [setSearchParams]);
+
+  // Handle variant selection toggle
+  const handleToggleVariantSelection = useCallback((variantId: string) => {
+    setSelectedVariantIds(prev => {
+      const next = new Set(prev);
+      if (next.has(variantId)) {
+        next.delete(variantId);
+      } else {
+        next.add(variantId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Clear all selections
+  const handleClearSelection = useCallback(() => {
+    setSelectedVariantIds(new Set());
+  }, []);
 
   // Filter variants based on filter state, exon visibility, and zoom region
   const filteredVariants = useMemo(() => {
@@ -313,6 +332,8 @@ export function GenePage() {
             regionUrl={`/region/${regionString}`}
             region={zoomRegion ?? undefined}
             onRegionChange={handleRegionChange}
+            selectedVariantIds={selectedVariantIds}
+            onToggleVariantSelection={handleToggleVariantSelection}
           />
           <VariantFilterControls value={filter} onChange={setFilter} />
         </>
@@ -328,7 +349,12 @@ export function GenePage() {
       </SectionTitle>
 
       {variants.length > 0 ? (
-        <VariantsTable variants={filteredVariants} />
+        <VariantsTable
+          variants={filteredVariants}
+          selectedVariantIds={selectedVariantIds}
+          onToggleSelection={handleToggleVariantSelection}
+          onClearSelection={handleClearSelection}
+        />
       ) : (
         <LoadingMessage>No variants found in this gene region.</LoadingMessage>
       )}

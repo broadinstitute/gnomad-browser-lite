@@ -152,6 +152,10 @@ interface GenomeBrowserProps {
   region?: { start: number; stop: number };
   /** Callback when user selects a new region via drag */
   onRegionChange?: (region: { start: number; stop: number }) => void;
+  /** Set of selected variant IDs */
+  selectedVariantIds?: Set<string>;
+  /** Callback when a variant selection is toggled */
+  onToggleVariantSelection?: (variantId: string) => void;
 }
 
 
@@ -450,6 +454,8 @@ export function GenomeBrowser({
   regionUrl,
   region,
   onRegionChange,
+  selectedVariantIds,
+  onToggleVariantSelection,
 }: GenomeBrowserProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
@@ -689,6 +695,8 @@ export function GenomeBrowser({
                   exons={exons}
                   showIntrons={showIntrons}
                   onHover={handleVariantHover}
+                  selectedIds={selectedVariantIds}
+                  onVariantClick={onToggleVariantSelection}
                 />
                 {/* Gene track at bottom, overlapping the baseline */}
                 <div style={{ marginTop: -25 }}>

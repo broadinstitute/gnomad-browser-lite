@@ -59,10 +59,50 @@ const RsidCell = styled(Cell)`
   color: #185da8;
 `;
 
+const SelectionCheckbox = styled.input`
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  accent-color: #1976d2;
+`;
+
+const SelectionHeader = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+`;
+
+const ClearButton = styled.button`
+  padding: 2px 6px;
+  font-size: 10px;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  background: #fff;
+  color: #666;
+  cursor: pointer;
+
+  &:hover {
+    background: #f5f5f5;
+    border-color: #ccc;
+  }
+`;
+
+const SelectionCount = styled.span`
+  font-size: 11px;
+  color: #1976d2;
+  font-weight: 500;
+`;
+
 interface VariantsTableProps {
   variants: Variant[];
   highlightedVariantId?: string;
   onHoverVariant?: (variantId: string | null) => void;
+  /** Set of selected variant IDs */
+  selectedVariantIds?: Set<string>;
+  /** Callback when a variant selection is toggled */
+  onToggleSelection?: (variantId: string) => void;
+  /** Callback to clear all selections */
+  onClearSelection?: () => void;
 }
 
 // Consequence category colors (matching gnomAD)
@@ -135,7 +175,32 @@ function getRsids(v: Variant): string[] {
 }
 
 // Define columns
-const createColumns = (): GridColumn<Variant>[] => [
+const createColumns = (
+  selectedIds?: Set<string>,
+  onToggle?: (id: string) => void
+): GridColumn<Variant>[] => [
+  // Selection checkbox column
+  ...(onToggle ? [{
+    key: 'select',
+    heading: '',
+    minWidth: 32,
+    grow: 0,
+    isSortable: false,
+    render: (row: Variant) => {
+      const variantId = getVariantId(row);
+      const isSelected = selectedIds?.has(variantId) || false;
+      return (
+        <Cell style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <SelectionCheckbox
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggle(variantId)}
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          />
+        </Cell>
+      );
+    },
+  }] : []),
   {
     key: 'variant_id',
     heading: 'Variant ID',
@@ -249,14 +314,20 @@ function compareValues<T>(a: T, b: T, ascending: boolean): number {
 export function VariantsTable({
   variants,
   highlightedVariantId,
-  onHoverVariant
+  onHoverVariant,
+  selectedVariantIds,
+  onToggleSelection,
+  onClearSelection,
 }: VariantsTableProps) {
   const gridRef = useRef<GridRef>(null);
   const [filter, setFilter] = useState('');
   const [sortKey, setSortKey] = useState<string>('variant_id');
   const [sortOrder, setSortOrder] = useState<'ascending' | 'descending'>('ascending');
 
-  const columns = useMemo(() => createColumns(), []);
+  const columns = useMemo(
+    () => createColumns(selectedVariantIds, onToggleSelection),
+    [selectedVariantIds, onToggleSelection]
+  );
 
   // Filter variants
   const filteredVariants = useMemo(() => {
@@ -340,6 +411,20 @@ export function VariantsTable({
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
+        <SelectionHeader>
+          {selectedVariantIds && selectedVariantIds.size > 0 && (
+            <>
+              <SelectionCount>
+                {selectedVariantIds.size} selected
+              </SelectionCount>
+              {onClearSelection && (
+                <ClearButton onClick={onClearSelection}>
+                  Clear
+                </ClearButton>
+              )}
+            </>
+          )}
+        </SelectionHeader>
         <Stats>
           {filter
             ? `Showing ${sortedVariants.length.toLocaleString()} of ${variants.length.toLocaleString()} variants`

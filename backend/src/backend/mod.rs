@@ -1,4 +1,5 @@
 pub mod duckdb;
+pub mod hail;
 
 use anyhow::Result;
 use async_trait::async_trait;

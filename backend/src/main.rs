@@ -17,6 +17,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::backend::duckdb::DuckDbBackend;
+use crate::backend::hail::HailBackend;
 use crate::backend::VariantBackend;
 use crate::models::api;
 
@@ -32,6 +33,11 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Increase file descriptor limit for Hail table partition reads
+    if let Err(e) = rlimit::setrlimit(rlimit::Resource::NOFILE, 10240, 10240) {
+        eprintln!("Warning: failed to set file descriptor limit: {}", e);
+    }
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -40,39 +46,63 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Initialize DuckDB backend
-    let data_dir = std::env::var("DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("../data"));
-    tracing::info!("Using data directory: {:?}", data_dir);
-
-    let duckdb_backend = DuckDbBackend::new(&data_dir)?;
-
-    // Print schema info for debugging
-    if let Ok(schema) = duckdb_backend.get_schema("genes") {
-        tracing::info!("Genes schema:");
-        for (name, dtype) in schema {
-            tracing::debug!("  {} : {}", name, dtype);
-        }
-    }
-    if let Ok(schema) = duckdb_backend.get_schema("variants") {
-        tracing::info!("Variants schema:");
-        for (name, dtype) in schema {
-            tracing::debug!("  {} : {}", name, dtype);
-        }
-    }
-
     // Initialize moka cache: 500MB capacity, 24h TTL
     let cache = moka::future::Cache::builder()
         .max_capacity(500 * 1024 * 1024)
         .time_to_live(std::time::Duration::from_secs(24 * 60 * 60))
         .build();
 
-    let duckdb_arc = Arc::new(duckdb_backend);
-    let state = AppState {
-        backend: Arc::clone(&duckdb_arc) as Arc<dyn VariantBackend>,
-        duckdb: Some(duckdb_arc),
-        cache,
+    // Select backend based on USE_HAIL environment variable
+    let use_hail = std::env::var("USE_HAIL").map_or(false, |v| v == "1" || v == "true");
+
+    let state = if use_hail {
+        tracing::info!("Using Hail backend (direct GCS reads)");
+
+        let variants_path = std::env::var("HAIL_VARIANTS_PATH")
+            .unwrap_or_else(|_| crate::backend::hail::DEFAULT_VARIANTS_PATH.to_string());
+        let genes_path = std::env::var("HAIL_GENES_PATH")
+            .unwrap_or_else(|_| crate::backend::hail::DEFAULT_GENES_PATH.to_string());
+
+        tracing::info!("Variants: {}", variants_path);
+        tracing::info!("Genes: {}", genes_path);
+
+        let hail_backend = HailBackend::new(&variants_path, &genes_path);
+
+        AppState {
+            backend: Arc::new(hail_backend) as Arc<dyn VariantBackend>,
+            duckdb: None,
+            cache,
+        }
+    } else {
+        tracing::info!("Using DuckDB backend (local Parquet files)");
+
+        let data_dir = std::env::var("DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("../data"));
+        tracing::info!("Using data directory: {:?}", data_dir);
+
+        let duckdb_backend = DuckDbBackend::new(&data_dir)?;
+
+        // Print schema info for debugging
+        if let Ok(schema) = duckdb_backend.get_schema("genes") {
+            tracing::info!("Genes schema:");
+            for (name, dtype) in schema {
+                tracing::debug!("  {} : {}", name, dtype);
+            }
+        }
+        if let Ok(schema) = duckdb_backend.get_schema("variants") {
+            tracing::info!("Variants schema:");
+            for (name, dtype) in schema {
+                tracing::debug!("  {} : {}", name, dtype);
+            }
+        }
+
+        let duckdb_arc = Arc::new(duckdb_backend);
+        AppState {
+            backend: Arc::clone(&duckdb_arc) as Arc<dyn VariantBackend>,
+            duckdb: Some(duckdb_arc),
+            cache,
+        }
     };
 
     // Configure CORS for frontend

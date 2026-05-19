@@ -20,3 +20,5 @@ anyhow = "1.0"
 async-trait = "0.1"
 moka = { version = "0.12", features = ["future"] }
 bytes = "1.0"
+genohype-core = { path = "../../genohype/core", features = ["genomic", "gcp"] }
+rlimit = "0.10"

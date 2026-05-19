@@ -1,0 +1,564 @@
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use genohype_core::codec::EncodedValue;
+use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_field};
+use genohype_core::genomic::LocusTable;
+use genohype_core::query::QueryEngine;
+use tracing::debug;
+
+use super::VariantBackend;
+use crate::models::api::{
+    Exon, Gene, SearchResult, Transcript, TranscriptConsequence, Variant, VariantDetails,
+};
+
+/// Default GCS paths for public gnomAD data
+pub const DEFAULT_VARIANTS_PATH: &str =
+    "gs://gcp-public-data--gnomad/release/4.1.1/ht/browser/gnomad.browser.v4.1.1.sites.ht";
+pub const DEFAULT_GENES_PATH: &str =
+    "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht";
+
+pub struct HailBackend {
+    variants_path: String,
+    genes_path: String,
+}
+
+impl HailBackend {
+    pub fn new(variants_path: &str, genes_path: &str) -> Self {
+        Self {
+            variants_path: variants_path.to_string(),
+            genes_path: genes_path.to_string(),
+        }
+    }
+
+    pub fn with_defaults() -> Self {
+        Self::new(DEFAULT_VARIANTS_PATH, DEFAULT_GENES_PATH)
+    }
+}
+
+// ============================================================================
+// Gene extraction from gnomAD genes table
+// ============================================================================
+
+fn extract_gene(row: &EncodedValue) -> Option<Gene> {
+    let gene_id = get_field(row, "gene_id").and_then(as_string)?;
+    let gene_symbol = get_field(row, "symbol")
+        .or_else(|| get_field(row, "gene_symbol"))
+        .and_then(as_string);
+    let gencode_symbol = get_field(row, "gencode_symbol").and_then(as_string);
+
+    let chrom = get_field(row, "chrom")
+        .and_then(as_string)
+        .or_else(|| get_nested_field(row, "interval.start.contig").and_then(as_string))?;
+    let start = get_field(row, "start")
+        .and_then(as_i32)
+        .or_else(|| get_nested_field(row, "interval.start.position").and_then(as_i32))
+        .unwrap_or(0) as i64;
+    let stop = get_field(row, "stop")
+        .and_then(as_i32)
+        .or_else(|| get_nested_field(row, "interval.end.position").and_then(as_i32))
+        .unwrap_or(0) as i64;
+
+    let strand = get_field(row, "strand").and_then(as_string);
+    let canonical_transcript_id = get_field(row, "canonical_transcript_id")
+        .and_then(as_string)
+        .or_else(|| get_field(row, "mane_select_transcript_id").and_then(as_string));
+
+    let transcripts = extract_array(row, "transcripts", extract_transcript);
+    let exons = extract_array(row, "exons", extract_exon);
+
+    Some(Gene {
+        gene_id,
+        gene_symbol,
+        gencode_symbol,
+        chrom,
+        start,
+        stop,
+        strand,
+        canonical_transcript_id,
+        transcripts,
+        exons,
+    })
+}
+
+fn extract_transcript(v: &EncodedValue) -> Option<Transcript> {
+    let transcript_id = get_field(v, "transcript_id").and_then(as_string)?;
+    let start = get_field(v, "start").and_then(as_i32).map(|i| i as i64);
+    let stop = get_field(v, "stop").and_then(as_i32).map(|i| i as i64);
+    let exons = extract_array(v, "exons", extract_exon).unwrap_or_default();
+
+    Some(Transcript {
+        transcript_id,
+        start,
+        stop,
+        exons,
+    })
+}
+
+fn extract_exon(v: &EncodedValue) -> Option<Exon> {
+    let feature_type = get_field(v, "feature_type")
+        .and_then(as_string)
+        .unwrap_or_else(|| "exon".to_string());
+    let start = get_field(v, "start").and_then(as_i32)? as i64;
+    let stop = get_field(v, "stop").and_then(as_i32)? as i64;
+    Some(Exon {
+        feature_type,
+        start,
+        stop,
+    })
+}
+
+fn extract_array<T>(
+    row: &EncodedValue,
+    field: &str,
+    f: fn(&EncodedValue) -> Option<T>,
+) -> Option<Vec<T>> {
+    if let Some(EncodedValue::Array(arr)) = get_field(row, field) {
+        let items: Vec<T> = arr.iter().filter_map(f).collect();
+        if items.is_empty() {
+            None
+        } else {
+            Some(items)
+        }
+    } else {
+        None
+    }
+}
+
+// ============================================================================
+// Variant extraction from gnomAD browser sites table
+// ============================================================================
+
+fn extract_variant(row: &EncodedValue) -> Option<Variant> {
+    let locus = get_field(row, "locus")?;
+    let contig = as_string(get_field(locus, "contig")?)?;
+    let pos = as_i32(get_field(locus, "position")?)? as i64;
+
+    let alleles = extract_alleles(row)?;
+    let variant_id = get_field(row, "variant_id").and_then(as_string);
+    let rsids = extract_string_array(row, "rsids");
+
+    let (consequence, hgvsc, hgvsp, gene_id, gene_symbol, transcript_id, lof) =
+        extract_canonical_consequence(row);
+    let (ac, an, af) = extract_freq(row);
+
+    Some(Variant {
+        variant_id,
+        pos,
+        chrom: contig,
+        alleles,
+        rsids,
+        consequence,
+        hgvsc,
+        hgvsp,
+        gene_id,
+        gene_symbol,
+        transcript_id,
+        lof,
+        ac,
+        an,
+        af,
+        allele_freq: af,
+    })
+}
+
+fn extract_variant_details(row: &EncodedValue) -> Option<VariantDetails> {
+    let locus = get_field(row, "locus")?;
+    let contig = as_string(get_field(locus, "contig")?)?;
+    let pos = as_i32(get_field(locus, "position")?)? as i64;
+
+    let alleles = extract_alleles(row)?;
+    let variant_id = get_field(row, "variant_id").and_then(as_string);
+    let rsids = extract_string_array(row, "rsids");
+    let caid = get_field(row, "caid").and_then(as_string);
+
+    let (consequence, hgvsc, hgvsp, gene_id, gene_symbol, transcript_id, _lof) =
+        extract_canonical_consequence(row);
+    let (ac, an, af) = extract_freq(row);
+
+    // Pass through deeply nested structures as JSON
+    let exome = get_field(row, "exome").and_then(encoded_to_json);
+    let genome = get_field(row, "genome").and_then(encoded_to_json);
+    let joint = get_field(row, "joint").and_then(encoded_to_json);
+    let in_silico_predictors = get_field(row, "in_silico_predictors").and_then(encoded_to_json);
+    let coverage = get_field(row, "coverage").and_then(encoded_to_json);
+    let transcript_consequences = extract_transcript_consequences(row);
+
+    Some(VariantDetails {
+        variant_id,
+        pos,
+        chrom: contig,
+        alleles,
+        rsids,
+        consequence,
+        hgvsc,
+        hgvsp,
+        gene_id,
+        gene_symbol,
+        transcript_id,
+        ac,
+        an,
+        af,
+        allele_freq: af,
+        caid,
+        exome,
+        genome,
+        joint,
+        transcript_consequences,
+        in_silico_predictors,
+        coverage,
+    })
+}
+
+fn extract_alleles(row: &EncodedValue) -> Option<Vec<String>> {
+    if let Some(EncodedValue::Array(arr)) = get_field(row, "alleles") {
+        let alleles: Vec<String> = arr.iter().filter_map(|a| a.as_string()).collect();
+        if alleles.is_empty() {
+            None
+        } else {
+            Some(alleles)
+        }
+    } else {
+        None
+    }
+}
+
+fn extract_string_array(row: &EncodedValue, field: &str) -> Option<Vec<String>> {
+    if let Some(EncodedValue::Array(arr)) = get_field(row, field) {
+        let strings: Vec<String> = arr.iter().filter_map(|a| a.as_string()).collect();
+        if strings.is_empty() {
+            None
+        } else {
+            Some(strings)
+        }
+    } else {
+        None
+    }
+}
+
+fn encoded_to_json(value: &EncodedValue) -> Option<serde_json::Value> {
+    serde_json::to_value(value).ok()
+}
+
+/// Extract frequency data from the variant. Prefer exome, fall back to genome.
+fn extract_freq(row: &EncodedValue) -> (i64, i64, f64) {
+    for dataset in &["exome", "genome"] {
+        if let Some(dataset_val) = get_field(row, dataset) {
+            if let Some(freq) = get_field(dataset_val, "freq") {
+                // Try "all" ancestry group first
+                if let Some(all_freq) = get_field(freq, "all") {
+                    if let Some(result) = get_ac_an_af(all_freq) {
+                        return result;
+                    }
+                }
+                // Fall back to freq struct directly
+                if let Some(result) = get_ac_an_af(freq) {
+                    return result;
+                }
+            }
+        }
+    }
+    (0, 0, 0.0)
+}
+
+fn get_ac_an_af(freq_val: &EncodedValue) -> Option<(i64, i64, f64)> {
+    let ac = get_field(freq_val, "ac")
+        .or_else(|| get_field(freq_val, "AC"))
+        .and_then(|v| match v {
+            EncodedValue::Int32(i) => Some(*i as i64),
+            EncodedValue::Int64(i) => Some(*i),
+            EncodedValue::Float64(f) => Some(*f as i64),
+            _ => None,
+        })?;
+    let an = get_field(freq_val, "an")
+        .or_else(|| get_field(freq_val, "AN"))
+        .and_then(|v| match v {
+            EncodedValue::Int32(i) => Some(*i as i64),
+            EncodedValue::Int64(i) => Some(*i),
+            EncodedValue::Float64(f) => Some(*f as i64),
+            _ => None,
+        })?;
+    let af = if an > 0 {
+        ac as f64 / an as f64
+    } else {
+        0.0
+    };
+    Some((ac, an, af))
+}
+
+fn extract_canonical_consequence(
+    row: &EncodedValue,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    if let Some(EncodedValue::Array(tcs)) = get_field(row, "transcript_consequences") {
+        let canonical = tcs.iter().find(|tc| {
+            get_field(tc, "is_canonical")
+                .and_then(|v| match v {
+                    EncodedValue::Boolean(b) => Some(*b),
+                    _ => None,
+                })
+                .unwrap_or(false)
+        });
+
+        let tc = canonical.or_else(|| tcs.first());
+
+        if let Some(tc) = tc {
+            return (
+                get_field(tc, "major_consequence").and_then(as_string),
+                get_field(tc, "hgvsc").and_then(as_string),
+                get_field(tc, "hgvsp").and_then(as_string),
+                get_field(tc, "gene_id").and_then(as_string),
+                get_field(tc, "gene_symbol").and_then(as_string),
+                get_field(tc, "transcript_id").and_then(as_string),
+                get_field(tc, "lof").and_then(as_string),
+            );
+        }
+    }
+    (None, None, None, None, None, None, None)
+}
+
+fn extract_transcript_consequences(row: &EncodedValue) -> Option<Vec<TranscriptConsequence>> {
+    if let Some(EncodedValue::Array(tcs)) = get_field(row, "transcript_consequences") {
+        let results: Vec<TranscriptConsequence> = tcs
+            .iter()
+            .filter_map(|tc| {
+                let gene_id = get_field(tc, "gene_id").and_then(as_string)?;
+                let gene_symbol = get_field(tc, "gene_symbol").and_then(as_string)?;
+                let transcript_id = get_field(tc, "transcript_id").and_then(as_string)?;
+                let major_consequence = get_field(tc, "major_consequence").and_then(as_string)?;
+
+                Some(TranscriptConsequence {
+                    gene_id,
+                    gene_symbol,
+                    transcript_id,
+                    transcript_version: get_field(tc, "transcript_version").and_then(as_string),
+                    consequence_terms: extract_string_array(tc, "consequence_terms"),
+                    major_consequence,
+                    hgvsc: get_field(tc, "hgvsc").and_then(as_string),
+                    hgvsp: get_field(tc, "hgvsp").and_then(as_string),
+                    is_canonical: get_field(tc, "is_canonical").and_then(|v| match v {
+                        EncodedValue::Boolean(b) => Some(*b),
+                        _ => None,
+                    }),
+                    is_mane_select: get_field(tc, "is_mane_select").and_then(|v| match v {
+                        EncodedValue::Boolean(b) => Some(*b),
+                        _ => None,
+                    }),
+                    is_mane_select_version: get_field(tc, "is_mane_select_version")
+                        .and_then(|v| match v {
+                            EncodedValue::Boolean(b) => Some(*b),
+                            _ => None,
+                        }),
+                    lof: get_field(tc, "lof").and_then(as_string),
+                    lof_filter: get_field(tc, "lof_filter").and_then(as_string),
+                    lof_flags: get_field(tc, "lof_flags").and_then(as_string),
+                    domains: extract_string_array(tc, "domains"),
+                    refseq_id: get_field(tc, "refseq_id").and_then(as_string),
+                    biotype: get_field(tc, "biotype").and_then(as_string),
+                })
+            })
+            .collect();
+        if results.is_empty() {
+            None
+        } else {
+            Some(results)
+        }
+    } else {
+        None
+    }
+}
+
+// ============================================================================
+// VariantBackend implementation
+// ============================================================================
+
+#[async_trait]
+impl VariantBackend for HailBackend {
+    async fn get_gene(&self, gene_id: &str) -> Result<Option<Gene>> {
+        let genes_path = self.genes_path.clone();
+        let gene_id = gene_id.to_string();
+
+        tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
+            let mut engine =
+                QueryEngine::open_path(&genes_path).context("Failed to open genes table")?;
+
+            // The genes table is keyed by gene_id — use a point lookup
+            let key = EncodedValue::Struct(vec![(
+                "gene_id".to_string(),
+                EncodedValue::Binary(gene_id.as_bytes().to_vec()),
+            )]);
+
+            match engine.lookup(&key)? {
+                Some(row) => Ok(extract_gene(&row)),
+                None => Ok(None),
+            }
+        })
+        .await?
+    }
+
+    async fn get_gene_by_symbol(&self, symbol: &str) -> Result<Option<Gene>> {
+        let genes_path = self.genes_path.clone();
+        let symbol = symbol.to_uppercase();
+
+        tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
+            let engine =
+                QueryEngine::open_path(&genes_path).context("Failed to open genes table")?;
+
+            // Full scan — genes table is keyed by gene_id, not symbol
+            for row_result in engine.query_iter(&[])? {
+                let row = match row_result {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+
+                let row_symbol = get_field(&row, "symbol")
+                    .or_else(|| get_field(&row, "gene_symbol"))
+                    .and_then(as_string);
+                if let Some(s) = row_symbol {
+                    if s.to_uppercase() == symbol {
+                        return Ok(extract_gene(&row));
+                    }
+                }
+            }
+
+            Ok(None)
+        })
+        .await?
+    }
+
+    async fn search_genes(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let genes_path = self.genes_path.clone();
+        let query = query.to_uppercase();
+
+        tokio::task::spawn_blocking(move || -> Result<Vec<SearchResult>> {
+            let engine =
+                QueryEngine::open_path(&genes_path).context("Failed to open genes table")?;
+
+            let mut results = Vec::new();
+
+            for row_result in engine.query_iter(&[])? {
+                let row = match row_result {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+
+                let gene_id = match get_field(&row, "gene_id").and_then(as_string) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let gene_symbol = get_field(&row, "symbol")
+                    .or_else(|| get_field(&row, "gene_symbol"))
+                    .and_then(as_string)
+                    .unwrap_or_default();
+
+                if gene_symbol.to_uppercase().starts_with(&query)
+                    || gene_id.to_uppercase().starts_with(&query)
+                {
+                    let chrom = get_field(&row, "chrom").and_then(as_string).or_else(|| {
+                        get_nested_field(&row, "interval.start.contig").and_then(as_string)
+                    });
+                    let start = get_field(&row, "start")
+                        .and_then(as_i32)
+                        .or_else(|| {
+                            get_nested_field(&row, "interval.start.position").and_then(as_i32)
+                        })
+                        .map(|i| i as i64);
+                    let stop = get_field(&row, "stop")
+                        .and_then(as_i32)
+                        .or_else(|| {
+                            get_nested_field(&row, "interval.end.position").and_then(as_i32)
+                        })
+                        .map(|i| i as i64);
+
+                    results.push(SearchResult {
+                        gene_id,
+                        gene_symbol,
+                        chrom,
+                        start,
+                        stop,
+                    });
+
+                    if results.len() >= limit {
+                        break;
+                    }
+                }
+            }
+
+            Ok(results)
+        })
+        .await?
+    }
+
+    async fn get_variants(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+        _force_fallback: bool,
+    ) -> Result<Vec<Variant>> {
+        let variants_path = self.variants_path.clone();
+        let chrom = chrom.to_string();
+        let start_i32 = start as i32;
+        let end_i32 = end as i32;
+
+        tokio::task::spawn_blocking(move || -> Result<Vec<Variant>> {
+            let table = LocusTable::open(&variants_path)
+                .context("Failed to open variants table")?;
+
+            debug!(
+                "Querying variants for {}:{}-{}",
+                chrom, start_i32, end_i32
+            );
+
+            let rows = table
+                .query_interval(&chrom, start_i32, end_i32)
+                .context("Failed to query variants interval")?;
+
+            debug!("Got {} raw rows from Hail table", rows.len());
+            let variants: Vec<Variant> = rows.iter().filter_map(extract_variant).collect();
+            debug!("Extracted {} variants", variants.len());
+
+            Ok(variants)
+        })
+        .await?
+    }
+
+    async fn get_variant_detail(
+        &self,
+        variant_id: &str,
+        _force_fallback: bool,
+    ) -> Result<Option<VariantDetails>> {
+        let variants_path = self.variants_path.clone();
+
+        // Parse variant_id: "chr1-55039447-G-A" or "1-55039447-G-A"
+        let parts: Vec<&str> = variant_id.split('-').collect();
+        if parts.len() < 4 {
+            anyhow::bail!("Invalid variant ID format: {}", variant_id);
+        }
+
+        let chrom = parts[0].to_string();
+        let pos: i32 = parts[1]
+            .parse()
+            .context("Invalid position in variant ID")?;
+        let ref_allele = parts[2].to_string();
+        let alt_allele = parts[3..].join("-");
+
+        tokio::task::spawn_blocking(move || -> Result<Option<VariantDetails>> {
+            let table = LocusTable::open(&variants_path)
+                .context("Failed to open variants table")?;
+
+            let rows = table
+                .query_variant(&chrom, pos, Some(&ref_allele), Some(&alt_allele))
+                .context("Failed to query variant")?;
+
+            Ok(rows.first().and_then(extract_variant_details))
+        })
+        .await?
+    }
+}

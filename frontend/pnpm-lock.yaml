@@ -6,7 +6,7 @@ settings:
 
 dependencies:
   '@fortawesome/fontawesome-free':
-    specifier: ^6.5.1
+    specifier: ^6.7.2
     version: 6.7.2
   '@gnomad/region-viewer':
     specifier: github:broadinstitute/gnomad-browser-toolkit#main
@@ -54,25 +54,25 @@ dependencies:
     specifier: ^3.2.0
     version: 3.2.0
   polished:
-    specifier: ^4.2.2
+    specifier: ^4.3.1
     version: 4.3.1
   prop-types:
     specifier: ^15.8.1
     version: 15.8.1
   react:
-    specifier: ^19.2.0
+    specifier: ^19.2.3
     version: 19.2.3
   react-dom:
-    specifier: ^19.2.0
+    specifier: ^19.2.3
     version: 19.2.3(react@19.2.3)
   react-router-dom:
-    specifier: ^7.12.0
+    specifier: ^7.13.0
     version: 7.13.0(react-dom@19.2.3)(react@19.2.3)
   react-sizeme:
     specifier: ^3.0.2
     version: 3.0.2
   react-window:
-    specifier: ^1.8.10
+    specifier: ^1.8.11
     version: 1.8.11(react-dom@19.2.3)(react@19.2.3)
   styled-components:
     specifier: ^6.3.8
@@ -80,22 +80,22 @@ dependencies:
 
 devDependencies:
   '@eslint/js':
-    specifier: ^9.39.1
+    specifier: ^9.39.2
     version: 9.39.2
   '@types/d3-scale':
-    specifier: ^4.0.8
+    specifier: ^4.0.9
     version: 4.0.9
   '@types/d3-selection':
-    specifier: ^3.0.10
+    specifier: ^3.0.11
     version: 3.0.11
   '@types/d3-shape':
-    specifier: ^3.1.6
+    specifier: ^3.1.8
     version: 3.1.8
   '@types/node':
-    specifier: ^24.10.1
+    specifier: ^24.10.9
     version: 24.10.9
   '@types/react':
-    specifier: ^19.2.5
+    specifier: ^19.2.9
     version: 19.2.9
   '@types/react-dom':
     specifier: ^19.2.3
@@ -104,13 +104,13 @@ devDependencies:
     specifier: ^4.7.0
     version: 4.7.0(vite@5.4.21)
   eslint:
-    specifier: ^9.39.1
+    specifier: ^9.39.2
     version: 9.39.2
   eslint-plugin-react-hooks:
     specifier: ^7.0.1
     version: 7.0.1(eslint@9.39.2)
   eslint-plugin-react-refresh:
-    specifier: ^0.4.24
+    specifier: ^0.4.26
     version: 0.4.26(eslint@9.39.2)
   globals:
     specifier: ^16.5.0
@@ -119,13 +119,13 @@ devDependencies:
     specifier: ~5.9.3
     version: 5.9.3
   typescript-eslint:
-    specifier: ^8.46.4
+    specifier: ^8.53.1
     version: 8.53.1(eslint@9.39.2)(typescript@5.9.3)
   vite:
     specifier: ^5.4.21
     version: 5.4.21(@types/node@24.10.9)
   vite-plugin-svgr:
-    specifier: ^4.3.0
+    specifier: ^4.5.0
     version: 4.5.0(typescript@5.9.3)(vite@5.4.21)
 
 packages:
@@ -2227,6 +2227,13 @@ packages:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
+    dev: false
+
+  /nanoid@3.3.12:
+    resolution: {integrity: sha512-ZB9RH/39qpq5Vu6Y+NmUaFhQR6pp+M2Xt76XBnEwDaGcVAqhlvxrl3B2bKS5D3NH3QR76v3aSrKaF/Kiy7lEtQ==}
+    engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
+    hasBin: true
+    dev: true
 
   /natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
@@ -2334,11 +2341,11 @@ packages:
       source-map-js: 1.2.1
     dev: false
 
-  /postcss@8.5.6:
-    resolution: {integrity: sha512-3Ybi1tAuwAP9s0r1UQ2J4n5Y0G05bJkpUIO0/bI9MhwmD70S5aTWbXGBwxHrelT+XM1k6dM0pk+SwNkpTRN7Pg==}
+  /postcss@8.5.15:
+    resolution: {integrity: sha512-FfR8sjd4em2T6fb3I2MwAJU7HWVMr9zba+enmQeeWFfCbm+UOC/0X4DS8XtpUTMwWMGbjKYP7xjfNekzyGmB3A==}
     engines: {node: ^10 || ^12 || >=14}
     dependencies:
-      nanoid: 3.3.11
+      nanoid: 3.3.12
       picocolors: 1.1.1
       source-map-js: 1.2.1
     dev: true
@@ -2705,7 +2712,7 @@ packages:
     dependencies:
       '@types/node': 24.10.9
       esbuild: 0.21.5
-      postcss: 8.5.6
+      postcss: 8.5.15
       rollup: 4.56.0
     optionalDependencies:
       fsevents: 2.3.3

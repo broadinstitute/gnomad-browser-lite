@@ -1,4 +1,6 @@
 mod backend;
+mod cli;
+mod config;
 mod models;
 
 use axum::{
@@ -9,6 +11,7 @@ use axum::{
     Router,
 };
 use bytes::Bytes;
+use clap::Parser;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -18,7 +21,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::backend::duckdb::DuckDbBackend;
 use crate::backend::hail::HailBackend;
+use crate::backend::tiered::TieredBackend;
 use crate::backend::VariantBackend;
+use crate::cli::{Cli, Commands};
+use crate::config::{BackendConfig, Config};
 use crate::models::api;
 
 /// Application state shared across handlers
@@ -29,6 +35,36 @@ struct AppState {
     /// Will be None when running with non-DuckDB backends.
     duckdb: Option<Arc<DuckDbBackend>>,
     cache: moka::future::Cache<String, Bytes>,
+}
+
+/// Recursively build a backend from the config.
+fn build_backend(cfg: &BackendConfig) -> anyhow::Result<Box<dyn VariantBackend>> {
+    match cfg {
+        BackendConfig::DuckDb { data_dir } => {
+            tracing::info!("Initializing DuckDB backend (data_dir: {})", data_dir);
+            let backend = DuckDbBackend::new(&PathBuf::from(data_dir))?;
+            Ok(Box::new(backend))
+        }
+        BackendConfig::Hail {
+            variants_path,
+            genes_path,
+        } => {
+            tracing::info!("Initializing Hail backend");
+            tracing::info!("  Variants: {}", variants_path);
+            tracing::info!("  Genes: {}", genes_path);
+            let backend = HailBackend::new(variants_path, genes_path);
+            Ok(Box::new(backend))
+        }
+        BackendConfig::Tiered { fast, fallback } => {
+            tracing::info!("Initializing TieredBackend (fast + fallback)");
+            let fast_backend = build_backend(fast)?;
+            let fallback_backend = build_backend(fallback)?;
+            Ok(Box::new(TieredBackend {
+                fast: fast_backend,
+                fallback: fallback_backend,
+            }))
+        }
+    }
 }
 
 #[tokio::main]
@@ -46,63 +82,55 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    let cli = Cli::parse();
+
+    // Resolve serve command (default if no subcommand given)
+    let (config_path, port_override) = match &cli.command {
+        Some(Commands::Serve { config, port }) => (config.as_deref(), *port),
+        None => (None, None),
+    };
+
+    let config = Config::load(config_path)?;
+    tracing::info!("Backend config: {:?}", config.backend);
+
     // Initialize moka cache: 500MB capacity, 24h TTL
     let cache = moka::future::Cache::builder()
         .max_capacity(500 * 1024 * 1024)
         .time_to_live(std::time::Duration::from_secs(24 * 60 * 60))
         .build();
 
-    // Select backend based on USE_HAIL environment variable
-    let use_hail = std::env::var("USE_HAIL").map_or(false, |v| v == "1" || v == "true");
+    // Build backend from config, with special handling for DuckDB schema endpoint
+    let (backend, duckdb): (Arc<dyn VariantBackend>, Option<Arc<DuckDbBackend>>) =
+        match &config.backend {
+            BackendConfig::DuckDb { data_dir } => {
+                let db = DuckDbBackend::new(&PathBuf::from(data_dir))?;
 
-    let state = if use_hail {
-        tracing::info!("Using Hail backend (direct GCS reads)");
+                if let Ok(schema) = db.get_schema("genes") {
+                    tracing::info!("Genes schema:");
+                    for (name, dtype) in schema {
+                        tracing::debug!("  {} : {}", name, dtype);
+                    }
+                }
+                if let Ok(schema) = db.get_schema("variants") {
+                    tracing::info!("Variants schema:");
+                    for (name, dtype) in schema {
+                        tracing::debug!("  {} : {}", name, dtype);
+                    }
+                }
 
-        let variants_path = std::env::var("HAIL_VARIANTS_PATH")
-            .unwrap_or_else(|_| crate::backend::hail::DEFAULT_VARIANTS_PATH.to_string());
-        let genes_path = std::env::var("HAIL_GENES_PATH")
-            .unwrap_or_else(|_| crate::backend::hail::DEFAULT_GENES_PATH.to_string());
-
-        tracing::info!("Variants: {}", variants_path);
-        tracing::info!("Genes: {}", genes_path);
-
-        let hail_backend = HailBackend::new(&variants_path, &genes_path);
-
-        AppState {
-            backend: Arc::new(hail_backend) as Arc<dyn VariantBackend>,
-            duckdb: None,
-            cache,
-        }
-    } else {
-        tracing::info!("Using DuckDB backend (local Parquet files)");
-
-        let data_dir = std::env::var("DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("../data"));
-        tracing::info!("Using data directory: {:?}", data_dir);
-
-        let duckdb_backend = DuckDbBackend::new(&data_dir)?;
-
-        // Print schema info for debugging
-        if let Ok(schema) = duckdb_backend.get_schema("genes") {
-            tracing::info!("Genes schema:");
-            for (name, dtype) in schema {
-                tracing::debug!("  {} : {}", name, dtype);
+                let arc = Arc::new(db);
+                (Arc::clone(&arc) as Arc<dyn VariantBackend>, Some(arc))
             }
-        }
-        if let Ok(schema) = duckdb_backend.get_schema("variants") {
-            tracing::info!("Variants schema:");
-            for (name, dtype) in schema {
-                tracing::debug!("  {} : {}", name, dtype);
+            other => {
+                let b = build_backend(other)?;
+                (Arc::from(b), None)
             }
-        }
+        };
 
-        let duckdb_arc = Arc::new(duckdb_backend);
-        AppState {
-            backend: Arc::clone(&duckdb_arc) as Arc<dyn VariantBackend>,
-            duckdb: Some(duckdb_arc),
-            cache,
-        }
+    let state = AppState {
+        backend,
+        duckdb,
+        cache,
     };
 
     // Configure CORS for frontend
@@ -123,8 +151,11 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    // Start server
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    // Resolve port: CLI flag > PORT env var > default 3000
+    let port = port_override
+        .map(|p| p.to_string())
+        .or_else(|| std::env::var("PORT").ok())
+        .unwrap_or_else(|| "3000".to_string());
     let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Starting server on {}", addr);
 

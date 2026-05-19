@@ -22,3 +22,5 @@ moka = { version = "0.12", features = ["future"] }
 bytes = "1.0"
 genohype-core = { path = "../../genohype/core", features = ["genomic", "gcp"] }
 rlimit = "0.10"
+clap = { version = "4.4", features = ["derive"] }
+toml = "0.8"

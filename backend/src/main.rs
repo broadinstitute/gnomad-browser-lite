@@ -1,4 +1,5 @@
-mod db;
+mod backend;
+mod models;
 
 use axum::{
     extract::{Path, Query, State},
@@ -7,18 +8,26 @@ use axum::{
     routing::get,
     Router,
 };
+use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::db::Database;
+use crate::backend::duckdb::DuckDbBackend;
+use crate::backend::VariantBackend;
+use crate::models::api;
 
 /// Application state shared across handlers
 #[derive(Clone)]
 struct AppState {
-    db: Database,
+    backend: Arc<dyn VariantBackend>,
+    /// DuckDB backend kept for schema introspection (debugging only).
+    /// Will be None when running with non-DuckDB backends.
+    duckdb: Option<Arc<DuckDbBackend>>,
+    cache: moka::future::Cache<String, Bytes>,
 }
 
 #[tokio::main]
@@ -31,32 +40,40 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Initialize database
-    let db = Database::new()?;
-
-    // Register Parquet views - use DATA_DIR env var or default to ../data
+    // Initialize DuckDB backend
     let data_dir = std::env::var("DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("../data"));
     tracing::info!("Using data directory: {:?}", data_dir);
-    db.register_views(&data_dir)?;
+
+    let duckdb_backend = DuckDbBackend::new(&data_dir)?;
 
     // Print schema info for debugging
-    if let Ok(schema) = db.get_schema("genes") {
+    if let Ok(schema) = duckdb_backend.get_schema("genes") {
         tracing::info!("Genes schema:");
         for (name, dtype) in schema {
             tracing::debug!("  {} : {}", name, dtype);
         }
     }
-
-    if let Ok(schema) = db.get_schema("variants") {
+    if let Ok(schema) = duckdb_backend.get_schema("variants") {
         tracing::info!("Variants schema:");
         for (name, dtype) in schema {
             tracing::debug!("  {} : {}", name, dtype);
         }
     }
 
-    let state = AppState { db };
+    // Initialize moka cache: 500MB capacity, 24h TTL
+    let cache = moka::future::Cache::builder()
+        .max_capacity(500 * 1024 * 1024)
+        .time_to_live(std::time::Duration::from_secs(24 * 60 * 60))
+        .build();
+
+    let duckdb_arc = Arc::new(duckdb_backend);
+    let state = AppState {
+        backend: Arc::clone(&duckdb_arc) as Arc<dyn VariantBackend>,
+        duckdb: Some(duckdb_arc),
+        cache,
+    };
 
     // Configure CORS for frontend
     let cors = CorsLayer::new()
@@ -76,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    // Start server - use PORT env var or default to 3000
+    // Start server
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Starting server on {}", addr);
@@ -87,7 +104,27 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Health check endpoint
+// ==================== Query parameters ====================
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+fn default_limit() -> usize {
+    10
+}
+
+#[derive(Deserialize)]
+struct VariantQuery {
+    #[serde(default)]
+    force_fallback: bool,
+}
+
+// ==================== Handlers ====================
+
 async fn health_check() -> Json<Value> {
     Json(json!({
         "status": "ok",
@@ -95,21 +132,30 @@ async fn health_check() -> Json<Value> {
     }))
 }
 
-/// Get gene by ID or symbol
-/// GET /api/gene/:gene_id
 async fn get_gene(
     State(state): State<AppState>,
     Path(gene_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Try by gene_id first, then by symbol
+    // Check cache
+    let cache_key = format!("gene:{}", gene_id);
+    if let Some(cached) = state.cache.get(&cache_key).await {
+        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+    }
+
     let result = if gene_id.starts_with("ENSG") {
-        state.db.get_gene(&gene_id)
+        state.backend.get_gene(&gene_id).await
     } else {
-        state.db.get_gene_by_symbol(&gene_id)
+        state.backend.get_gene_by_symbol(&gene_id).await
     };
 
     match result {
-        Ok(Some(gene)) => Ok(Json(gene)),
+        Ok(Some(gene)) => {
+            let json_val = serde_json::to_value(&gene).unwrap();
+            // Cache the result
+            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+            state.cache.insert(cache_key, bytes).await;
+            Ok(Json(json_val))
+        }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "Gene not found", "gene_id": gene_id })),
@@ -124,64 +170,65 @@ async fn get_gene(
     }
 }
 
-/// Get variants for a gene
-/// GET /api/gene/:gene_id/variants
 async fn get_gene_variants(
     State(state): State<AppState>,
     Path(gene_id): Path<String>,
+    Query(params): Query<VariantQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // First get the gene to find its coordinates
-    let gene_result = if gene_id.starts_with("ENSG") {
-        state.db.get_gene(&gene_id)
-    } else {
-        state.db.get_gene_by_symbol(&gene_id)
-    };
+    // Check cache
+    let cache_key = format!("gene_variants:{}:fb={}", gene_id, params.force_fallback);
+    if let Some(cached) = state.cache.get(&cache_key).await {
+        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+    }
 
-    let gene = match gene_result {
-        Ok(Some(g)) => g,
-        Ok(None) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Gene not found", "gene_id": gene_id })),
-            ))
+    // Look up gene first
+    let gene = {
+        let result = if gene_id.starts_with("ENSG") {
+            state.backend.get_gene(&gene_id).await
+        } else {
+            state.backend.get_gene_by_symbol(&gene_id).await
+        };
+
+        match result {
+            Ok(Some(g)) => g,
+            Ok(None) => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "Gene not found", "gene_id": gene_id })),
+                ))
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                ))
+            }
         }
-        Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            ))
-        }
     };
 
-    // Extract coordinates from gene
-    let chrom_raw = gene
-        .get("chrom")
-        .or_else(|| gene.get("reference_genome"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    // Normalize chromosome to match variants format (chr1, chr2, etc.)
-    let chrom = if chrom_raw.starts_with("chr") {
-        chrom_raw.to_string()
+    // Normalize chromosome
+    let chrom = if gene.chrom.starts_with("chr") {
+        gene.chrom.clone()
     } else {
-        format!("chr{}", chrom_raw)
+        format!("chr{}", gene.chrom)
     };
-    let start = gene
-        .get("start")
-        .or_else(|| gene.get("gene_start"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-    let stop = gene
-        .get("stop")
-        .or_else(|| gene.get("gene_stop"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
 
-    match state.db.get_variants(&chrom, start, stop) {
-        Ok(variants) => Ok(Json(json!({
-            "gene": gene,
-            "variants": variants,
-            "total": variants.len()
-        }))),
+    match state
+        .backend
+        .get_variants(&chrom, gene.start, gene.stop, params.force_fallback)
+        .await
+    {
+        Ok(variants) => {
+            let response = api::GeneVariantsResponse {
+                gene,
+                total: variants.len(),
+                variants,
+            };
+            let json_val = serde_json::to_value(&response).unwrap();
+            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+            state.cache.insert(cache_key, bytes).await;
+            Ok(Json(json_val))
+        }
         Err(e) => {
             tracing::error!("Error fetching variants for {}: {}", gene_id, e);
             Err((
@@ -192,12 +239,8 @@ async fn get_gene_variants(
     }
 }
 
-/// Parse region string like "chr1-55039000-55065000" or "1:55039000-55065000"
 fn parse_region(region_id: &str) -> Option<(String, i64, i64)> {
-    // Handle formats: "chr1-start-end" or "chr1:start-end"
-    let parts: Vec<&str> = region_id
-        .split(|c| c == '-' || c == ':')
-        .collect();
+    let parts: Vec<&str> = region_id.split(|c| c == '-' || c == ':').collect();
 
     if parts.len() == 3 {
         let chrom = parts[0].to_string();
@@ -205,7 +248,6 @@ fn parse_region(region_id: &str) -> Option<(String, i64, i64)> {
         let end = parts[2].parse().ok()?;
         Some((chrom, start, end))
     } else if parts.len() == 2 {
-        // Format: "chr1:55039000-55065000" split as ["chr1", "55039000", "55065000"]
         let inner: Vec<&str> = parts[1].split('-').collect();
         if inner.len() == 2 {
             let chrom = parts[0].to_string();
@@ -220,12 +262,10 @@ fn parse_region(region_id: &str) -> Option<(String, i64, i64)> {
     }
 }
 
-/// Get variants in a genomic region
-/// GET /api/region/:region_id
-/// Region format: chr1-55039000-55065000 or chr1:55039000-55065000
 async fn get_region_variants(
     State(state): State<AppState>,
     Path(region_id): Path<String>,
+    Query(params): Query<VariantQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let (chrom, start, end) = match parse_region(&region_id) {
         Some(r) => r,
@@ -241,16 +281,32 @@ async fn get_region_variants(
         }
     };
 
-    match state.db.get_variants(&chrom, start, end) {
-        Ok(variants) => Ok(Json(json!({
-            "region": {
-                "chrom": chrom,
-                "start": start,
-                "end": end
-            },
-            "variants": variants,
-            "total": variants.len()
-        }))),
+    // Check cache
+    let cache_key = format!("region:{}:{}-{}:fb={}", chrom, start, end, params.force_fallback);
+    if let Some(cached) = state.cache.get(&cache_key).await {
+        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+    }
+
+    match state
+        .backend
+        .get_variants(&chrom, start, end, params.force_fallback)
+        .await
+    {
+        Ok(variants) => {
+            let response = api::RegionVariantsResponse {
+                region: api::RegionInfo {
+                    chrom,
+                    start,
+                    end,
+                },
+                total: variants.len(),
+                variants,
+            };
+            let json_val = serde_json::to_value(&response).unwrap();
+            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+            state.cache.insert(cache_key, bytes).await;
+            Ok(Json(json_val))
+        }
         Err(e) => {
             tracing::error!("Error fetching region {}: {}", region_id, e);
             Err((
@@ -261,29 +317,19 @@ async fn get_region_variants(
     }
 }
 
-#[derive(Deserialize)]
-struct SearchQuery {
-    q: String,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
-
-fn default_limit() -> usize {
-    10
-}
-
-/// Search genes by symbol
-/// GET /api/search?q=PCSK&limit=10
 async fn search_genes(
     State(state): State<AppState>,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match state.db.search_genes(&params.q, params.limit) {
-        Ok(results) => Ok(Json(json!({
-            "query": params.q,
-            "results": results,
-            "total": results.len()
-        }))),
+    match state.backend.search_genes(&params.q, params.limit).await {
+        Ok(results) => {
+            let response = api::SearchResponse {
+                query: params.q,
+                total: results.len(),
+                results,
+            };
+            Ok(Json(serde_json::to_value(&response).unwrap()))
+        }
         Err(e) => {
             tracing::error!("Error searching genes: {}", e);
             Err((
@@ -294,14 +340,28 @@ async fn search_genes(
     }
 }
 
-/// Get variant detail by ID
-/// GET /api/variant/:variant_id
 async fn get_variant_detail(
     State(state): State<AppState>,
     Path(variant_id): Path<String>,
+    Query(params): Query<VariantQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match state.db.get_variant(&variant_id) {
-        Ok(Some(variant)) => Ok(Json(variant)),
+    // Check cache
+    let cache_key = format!("variant:{}:fb={}", variant_id, params.force_fallback);
+    if let Some(cached) = state.cache.get(&cache_key).await {
+        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+    }
+
+    match state
+        .backend
+        .get_variant_detail(&variant_id, params.force_fallback)
+        .await
+    {
+        Ok(Some(variant)) => {
+            let json_val = serde_json::to_value(&variant).unwrap();
+            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+            state.cache.insert(cache_key, bytes).await;
+            Ok(Json(json_val))
+        }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "Variant not found", "variant_id": variant_id })),
@@ -316,13 +376,10 @@ async fn get_variant_detail(
     }
 }
 
-/// Get table schema for debugging
-/// GET /api/schema/:table
 async fn get_table_schema(
     State(state): State<AppState>,
     Path(table): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Only allow known tables
     if table != "genes" && table != "variants" {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -330,7 +387,16 @@ async fn get_table_schema(
         ));
     }
 
-    match state.db.get_schema(&table) {
+    let Some(duckdb_backend) = &state.duckdb else {
+        return Err((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({ "error": "Schema introspection only available with DuckDB backend" })),
+        ));
+    };
+
+    let schema_result = duckdb_backend.get_schema(&table);
+
+    match schema_result {
         Ok(schema) => {
             let fields: Vec<Value> = schema
                 .into_iter()

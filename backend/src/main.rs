@@ -3,6 +3,7 @@ mod cli;
 mod commands;
 mod config;
 mod models;
+mod worker;
 
 use axum::{
     extract::{Path, Query, State},
@@ -142,6 +143,26 @@ async fn main() -> anyhow::Result<()> {
                 *limit,
             )
             .await;
+        }
+        Some(Commands::Pool(pool_cmd)) => {
+            return commands::pool::run(pool_cmd).await;
+        }
+        Some(Commands::Worker {
+            coordinator_url,
+            worker_id,
+            poll_interval_ms,
+            genohype_bin,
+        }) => {
+            return worker::run_worker(
+                coordinator_url,
+                worker_id.as_deref(),
+                *poll_interval_ms,
+                genohype_bin,
+            )
+            .await;
+        }
+        Some(Commands::Clickhouse(ch_cmd)) => {
+            return commands::infra::run(ch_cmd).map_err(Into::into);
         }
         _ => {}
     }

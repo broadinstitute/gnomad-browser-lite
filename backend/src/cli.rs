@@ -128,4 +128,144 @@ pub enum Commands {
         #[arg(long)]
         limit: Option<u64>,
     },
+
+    /// Manage GCP worker pools (native genohype-pool integration)
+    #[command(subcommand)]
+    Pool(PoolCommands),
+
+    /// Run as a distributed worker node
+    Worker {
+        /// Coordinator URL to poll for tasks
+        #[arg(long)]
+        coordinator_url: String,
+
+        /// Worker ID (auto-generated if not provided)
+        #[arg(long)]
+        worker_id: Option<String>,
+
+        /// Poll interval in milliseconds
+        #[arg(long, default_value = "1000")]
+        poll_interval_ms: u64,
+
+        /// Path to the genohype binary (used for export tasks)
+        #[arg(long, default_value = "genohype")]
+        genohype_bin: String,
+    },
+
+    /// Manage ClickHouse infrastructure on GCP
+    #[command(subcommand)]
+    Clickhouse(ClickhouseCommands),
+}
+
+/// Pool management subcommands using genohype-pool native library.
+#[derive(Subcommand, Debug)]
+pub enum PoolCommands {
+    /// Create a new GCP worker pool
+    Create {
+        /// Pool name
+        name: String,
+
+        /// Number of worker VMs
+        #[arg(long, default_value = "2")]
+        num_workers: usize,
+
+        /// GCP machine type
+        #[arg(long, default_value = "e2-standard-4")]
+        machine_type: String,
+
+        /// Use spot/preemptible VMs
+        #[arg(long)]
+        spot: bool,
+    },
+
+    /// Submit a distributed load job to the pool
+    Submit {
+        /// Pool name
+        pool: String,
+
+        /// Source Hail table path
+        source: String,
+
+        /// Target backend for loading
+        #[arg(long, value_enum)]
+        target: TargetBackend,
+
+        /// Table type to load
+        #[arg(long, value_enum)]
+        table_type: TableType,
+
+        /// ClickHouse URL (for ClickHouse target)
+        #[arg(long, default_value = "http://localhost:8123")]
+        clickhouse_url: String,
+
+        /// ClickHouse database
+        #[arg(long, default_value = "default")]
+        clickhouse_db: String,
+
+        /// Skip building the binary (use pre-staged)
+        #[arg(long)]
+        skip_build: bool,
+
+        /// Force resubmit even if a job is already running
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Get pool status
+    Status {
+        /// Pool name
+        name: String,
+    },
+
+    /// Destroy a worker pool
+    Destroy {
+        /// Pool name
+        name: String,
+    },
+}
+
+/// ClickHouse infrastructure subcommands (shells out to `genohype clickhouse`).
+#[derive(Subcommand, Debug)]
+pub enum ClickhouseCommands {
+    /// Create a ClickHouse VM on GCP
+    Create {
+        /// Instance name
+        name: String,
+
+        /// Profile name from config file
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// GCP machine type (overrides profile)
+        #[arg(long)]
+        machine_type: Option<String>,
+
+        /// Boot disk size in GB (overrides profile)
+        #[arg(long)]
+        disk_size_gb: Option<u32>,
+
+        /// GCP zone (overrides profile/defaults)
+        #[arg(long)]
+        zone: Option<String>,
+    },
+
+    /// Destroy a ClickHouse VM
+    Destroy {
+        /// Instance name
+        name: String,
+
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+
+    /// Create an IAP tunnel to a ClickHouse instance
+    Tunnel {
+        /// Instance name
+        name: String,
+
+        /// Local port to bind
+        #[arg(long, default_value = "8123")]
+        port: u16,
+    },
 }

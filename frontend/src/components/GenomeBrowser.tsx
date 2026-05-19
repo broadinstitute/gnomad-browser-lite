@@ -16,6 +16,7 @@ import {
   getVariantRadius,
 } from './variantUtils';
 import { ProteinPaintTrack } from './protein-paint';
+import { VariantHistogramTrack, type BinData } from './VariantHistogramTrack';
 
 const BrowserContainer = styled.div`
   margin: 1rem 0;
@@ -471,8 +472,9 @@ export function GenomeBrowser({
   const showIntrons = onShowIntronsChange ? showIntronsProp : showIntronsLocal;
   const setShowIntrons = onShowIntronsChange || setShowIntronsLocal;
 
-  // View mode toggle (scatter vs lollipop)
-  const [viewMode, setViewMode] = useState<'scatter' | 'lollipop'>('lollipop');
+  // View mode: 'auto' resolves based on density, or user can force a specific mode
+  const [viewMode, setViewMode] = useState<'auto' | 'histogram' | 'lollipop' | 'scatter'>('auto');
+  const [hoveredBin, setHoveredBin] = useState<BinData | null>(null);
 
   // Determine the effective view region (zoom region or full gene)
   const viewRegion = useMemo(() => {
@@ -532,6 +534,13 @@ export function GenomeBrowser({
     }
     return variants.filter(v => isInExonRegion(getVariantPosition(v), exons)).length;
   }, [variants, exons, showIntrons]);
+
+  // Compute effective view mode (auto-switch at 0.75 variants/pixel)
+  const effectiveViewMode = useMemo(() => {
+    if (viewMode !== 'auto') return viewMode;
+    const density = exonVariantCount / containerWidth;
+    return density > 0.75 ? 'histogram' : 'lollipop';
+  }, [viewMode, exonVariantCount, containerWidth]);
 
   // Handle variant hover
   const handleVariantHover = useCallback((variant: Variant | null) => {
@@ -632,19 +641,39 @@ export function GenomeBrowser({
                   </>
                 )}
               </>
+            ) : hoveredBin ? (
+              <>
+                <strong>{hoveredBin.total} variants</strong>
+                {' | '}
+                pLoF: {hoveredBin.categories.lof}
+                {', Missense: '}{hoveredBin.categories.missense}
+                {', Synonymous: '}{hoveredBin.categories.synonymous}
+                {', Other: '}{hoveredBin.categories.other}
+              </>
             ) : (
               <span style={{ color: '#999' }}>Hover over a variant for details</span>
             )}
           </HoverInfo>
         </HeaderLeft>
         <HeaderRight>
-          <ToggleButton
-            $active={viewMode === 'lollipop'}
-            onClick={() => setViewMode(viewMode === 'scatter' ? 'lollipop' : 'scatter')}
-            title={viewMode === 'scatter' ? 'Switch to lollipop view' : 'Switch to scatter view'}
+          <select
+            value={viewMode}
+            onChange={(e) => setViewMode(e.target.value as typeof viewMode)}
+            style={{
+              padding: '0.375rem 0.5rem',
+              border: '1px solid #ddd',
+              borderRadius: '4px',
+              background: '#fff',
+              color: '#666',
+              fontSize: '12px',
+              cursor: 'pointer',
+            }}
           >
-            {viewMode === 'scatter' ? 'Lollipop' : 'Scatter'}
-          </ToggleButton>
+            <option value="auto">Auto ({effectiveViewMode})</option>
+            <option value="histogram">Histogram</option>
+            <option value="lollipop">Lollipop</option>
+            <option value="scatter">Scatter</option>
+          </select>
           {regionUrl && (
             <LinkButton to={regionUrl}>
               View region
@@ -680,24 +709,34 @@ export function GenomeBrowser({
           />
         )}
 
-        {/* Combined Lollipop + Gene Track (when in lollipop mode) */}
-        {viewMode === 'lollipop' && (
+        {/* Combined density track + Gene Track (lollipop or histogram mode) */}
+        {effectiveViewMode !== 'scatter' && (
           <TrackRow>
             <TrackLabel>Variants</TrackLabel>
             <TrackContent>
               <div style={{ position: 'relative' }}>
-                {/* Lollipops above */}
-                <ProteinPaintTrack
-                  variants={variants}
-                  scale={scale}
-                  width={containerWidth}
-                  height={300}
-                  exons={exons}
-                  showIntrons={showIntrons}
-                  onHover={handleVariantHover}
-                  selectedIds={selectedVariantIds}
-                  onVariantClick={onToggleVariantSelection}
-                />
+                {effectiveViewMode === 'histogram' ? (
+                  <VariantHistogramTrack
+                    variants={variants}
+                    scale={scale}
+                    width={containerWidth}
+                    exons={exons}
+                    showIntrons={showIntrons}
+                    onHoverBin={setHoveredBin}
+                  />
+                ) : (
+                  <ProteinPaintTrack
+                    variants={variants}
+                    scale={scale}
+                    width={containerWidth}
+                    height={300}
+                    exons={exons}
+                    showIntrons={showIntrons}
+                    onHover={handleVariantHover}
+                    selectedIds={selectedVariantIds}
+                    onVariantClick={onToggleVariantSelection}
+                  />
+                )}
                 {/* Gene track at bottom, overlapping the baseline */}
                 <div style={{ marginTop: -25 }}>
                   <GeneTrack
@@ -714,7 +753,7 @@ export function GenomeBrowser({
         )}
 
         {/* Separate Gene Track (scatter mode only) */}
-        {viewMode === 'scatter' && (
+        {effectiveViewMode === 'scatter' && (
           <TrackRow>
             <TrackLabel>Gene</TrackLabel>
             <TrackContent>
@@ -730,7 +769,7 @@ export function GenomeBrowser({
         )}
 
         {/* Variant Track (scatter mode only) */}
-        {viewMode === 'scatter' && (
+        {effectiveViewMode === 'scatter' && (
           <TrackRow>
             <TrackLabel>Variants</TrackLabel>
             <TrackContent>

@@ -6,7 +6,7 @@ settings:
 
 dependencies:
   '@fortawesome/fontawesome-free':
-    specifier: ^6.5.1
+    specifier: ^6.7.2
     version: 6.7.2
   '@gnomad/region-viewer':
     specifier: github:broadinstitute/gnomad-browser-toolkit#main
@@ -54,25 +54,25 @@ dependencies:
     specifier: ^3.2.0
     version: 3.2.0
   polished:
-    specifier: ^4.2.2
+    specifier: ^4.3.1
     version: 4.3.1
   prop-types:
     specifier: ^15.8.1
     version: 15.8.1
   react:
-    specifier: ^19.2.0
+    specifier: ^19.2.3
     version: 19.2.3
   react-dom:
-    specifier: ^19.2.0
+    specifier: ^19.2.3
     version: 19.2.3(react@19.2.3)
   react-router-dom:
-    specifier: ^7.12.0
+    specifier: ^7.13.0
     version: 7.13.0(react-dom@19.2.3)(react@19.2.3)
   react-sizeme:
     specifier: ^3.0.2
     version: 3.0.2
   react-window:
-    specifier: ^1.8.10
+    specifier: ^1.8.11
     version: 1.8.11(react-dom@19.2.3)(react@19.2.3)
   styled-components:
     specifier: ^6.3.8
@@ -80,22 +80,22 @@ dependencies:
 
 devDependencies:
   '@eslint/js':
-    specifier: ^9.39.1
+    specifier: ^9.39.2
     version: 9.39.2
   '@types/d3-scale':
-    specifier: ^4.0.8
+    specifier: ^4.0.9
     version: 4.0.9
   '@types/d3-selection':
-    specifier: ^3.0.10
+    specifier: ^3.0.11
     version: 3.0.11
   '@types/d3-shape':
-    specifier: ^3.1.6
+    specifier: ^3.1.8
     version: 3.1.8
   '@types/node':
-    specifier: ^24.10.1
+    specifier: ^24.10.9
     version: 24.10.9
   '@types/react':
-    specifier: ^19.2.5
+    specifier: ^19.2.9
     version: 19.2.9
   '@types/react-dom':
     specifier: ^19.2.3
@@ -104,13 +104,13 @@ devDependencies:
     specifier: ^4.7.0
     version: 4.7.0(vite@5.4.21)
   eslint:
-    specifier: ^9.39.1
+    specifier: ^9.39.2
     version: 9.39.2
   eslint-plugin-react-hooks:
     specifier: ^7.0.1
     version: 7.0.1(eslint@9.39.2)
   eslint-plugin-react-refresh:
-    specifier: ^0.4.24
+    specifier: ^0.4.26
     version: 0.4.26(eslint@9.39.2)
   globals:
     specifier: ^16.5.0
@@ -119,13 +119,13 @@ devDependencies:
     specifier: ~5.9.3
     version: 5.9.3
   typescript-eslint:
-    specifier: ^8.46.4
+    specifier: ^8.53.1
     version: 8.53.1(eslint@9.39.2)(typescript@5.9.3)
   vite:
     specifier: ^5.4.21
     version: 5.4.21(@types/node@24.10.9)
   vite-plugin-svgr:
-    specifier: ^4.3.0
+    specifier: ^4.5.0
     version: 4.5.0(typescript@5.9.3)(vite@5.4.21)
 
 packages:
@@ -1358,7 +1358,7 @@ packages:
     dependencies:
       '@types/lodash': 4.17.23
       '@types/react': 19.2.9
-      lodash: 4.17.23
+      lodash: 4.18.1
       prop-types: 15.8.1
       react: 19.2.3
     dev: false
@@ -1384,7 +1384,7 @@ packages:
       classnames: 2.5.1
       d3-path: 1.0.9
       d3-shape: 1.3.7
-      lodash: 4.17.23
+      lodash: 4.18.1
       prop-types: 15.8.1
       react: 19.2.3
     dev: false
@@ -1397,7 +1397,7 @@ packages:
       '@types/lodash': 4.17.23
       '@types/react': 19.2.9
       classnames: 2.5.1
-      lodash: 4.17.23
+      lodash: 4.18.1
       prop-types: 15.8.1
       react: 19.2.3
       reduce-css-calc: 1.3.0
@@ -2175,8 +2175,8 @@ packages:
     resolution: {integrity: sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==}
     dev: true
 
-  /lodash@4.17.23:
-    resolution: {integrity: sha512-LgVTMpQtIopCi79SJeDiP0TfWi5CNEc/L/aRdTh3yIvmZXTnheWpKjSZhnvMl8iXbC1tFg9gdHHDMLoV7CnG+w==}
+  /lodash@4.18.1:
+    resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
     dev: false
 
   /loose-envify@1.4.0:

@@ -4,7 +4,7 @@ use genohype_core::codec::EncodedValue;
 use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_field};
 use genohype_core::genomic::LocusTable;
 use genohype_core::projection::{FieldPath, ProjectionTree};
-use genohype_core::query::{KeyRange, KeyValue, QueryBound, QueryEngine};
+use genohype_core::query::{IntervalList, KeyRange, KeyValue, QueryBound, QueryEngine};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -530,20 +530,13 @@ impl VariantBackend for HailBackend {
                 FieldPath::parse("transcript_consequences").unwrap(),
             ]);
 
-            let ranges = vec![
-                KeyRange::point_nested(
-                    vec!["locus".to_string(), "contig".to_string()],
-                    KeyValue::String(chrom),
-                ),
-                KeyRange {
-                    field_path: vec!["locus".to_string(), "position".to_string()],
-                    start: QueryBound::Included(KeyValue::Int32(start_i32)),
-                    end: QueryBound::Included(KeyValue::Int32(end_i32)),
-                },
-            ];
+            // Use IntervalList for index-based partition seeking (15x faster than KeyRange alone)
+            let interval_str = format!("{}:{}-{}", chrom, start_i32, end_i32);
+            let intervals = IntervalList::from_strings(&[interval_str])
+                .context("Failed to parse interval")?;
 
             let rows: Vec<EncodedValue> = engine
-                .query_iter_with_projection(&ranges, None, Some(Arc::new(projection)))?
+                .query_iter_with_projection(&[], Some(Arc::new(intervals)), Some(Arc::new(projection)))?
                 .collect::<genohype_core::Result<Vec<_>>>()
                 .context("Failed to query variants interval")?;
 

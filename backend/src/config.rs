@@ -30,6 +30,10 @@ pub enum BackendConfig {
         variants_path: String,
         genes_path: String,
     },
+    ClickHouse {
+        url: String,
+        database: String,
+    },
     Tiered {
         fast: Box<BackendConfig>,
         fallback: Box<BackendConfig>,

@@ -1,3 +1,4 @@
+pub mod clickhouse;
 pub mod duckdb;
 pub mod hail;
 pub mod tiered;

@@ -1,5 +1,6 @@
 mod backend;
 mod cli;
+mod commands;
 mod config;
 mod models;
 
@@ -19,6 +20,7 @@ use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::backend::clickhouse::ClickHouseBackend;
 use crate::backend::duckdb::DuckDbBackend;
 use crate::backend::hail::HailBackend;
 use crate::backend::tiered::TieredBackend;
@@ -55,6 +57,15 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<Box<dyn VariantBackend>>
             let backend = HailBackend::new(variants_path, genes_path);
             Ok(Box::new(backend))
         }
+        BackendConfig::ClickHouse { url, database } => {
+            tracing::info!(
+                "Initializing ClickHouse backend (url: {}, db: {})",
+                url,
+                database
+            );
+            let backend = ClickHouseBackend::new(url, database);
+            Ok(Box::new(backend))
+        }
         BackendConfig::Tiered { fast, fallback } => {
             tracing::info!("Initializing TieredBackend (fast + fallback)");
             let fast_backend = build_backend(fast)?;
@@ -84,10 +95,32 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    // Intercept non-server commands before starting the web server
+    if let Some(Commands::Validate {
+        source,
+        schema,
+        sample_size,
+        verbose,
+        fail_fast,
+        generate_schema,
+    }) = &cli.command
+    {
+        return commands::validate::run(
+            source,
+            schema.as_deref(),
+            *sample_size,
+            *verbose,
+            *fail_fast,
+            generate_schema.as_deref(),
+        )
+        .await;
+    }
+
     // Resolve serve command (default if no subcommand given)
     let (config_path, port_override) = match &cli.command {
         Some(Commands::Serve { config, port }) => (config.as_deref(), *port),
         None => (None, None),
+        _ => unreachable!("non-server commands handled above"),
     };
 
     let config = Config::load(config_path)?;

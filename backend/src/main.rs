@@ -96,24 +96,54 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Intercept non-server commands before starting the web server
-    if let Some(Commands::Validate {
-        source,
-        schema,
-        sample_size,
-        verbose,
-        fail_fast,
-        generate_schema,
-    }) = &cli.command
-    {
-        return commands::validate::run(
+    match &cli.command {
+        Some(Commands::Validate {
             source,
-            schema.as_deref(),
-            *sample_size,
-            *verbose,
-            *fail_fast,
-            generate_schema.as_deref(),
-        )
-        .await;
+            schema,
+            sample_size,
+            verbose,
+            fail_fast,
+            generate_schema,
+        }) => {
+            return commands::validate::run(
+                source,
+                schema.as_deref(),
+                *sample_size,
+                *verbose,
+                *fail_fast,
+                generate_schema.as_deref(),
+            )
+            .await;
+        }
+        Some(Commands::Load {
+            source,
+            target,
+            table_type,
+            filter,
+            clickhouse_url,
+            clickhouse_db,
+            output_dir,
+            init_strategy,
+            genohype_bin,
+            keep_staging,
+            limit,
+        }) => {
+            return commands::load::run(
+                source,
+                *target,
+                *table_type,
+                filter.as_deref(),
+                clickhouse_url,
+                clickhouse_db,
+                output_dir,
+                *init_strategy,
+                genohype_bin,
+                *keep_staging,
+                *limit,
+            )
+            .await;
+        }
+        _ => {}
     }
 
     // Resolve serve command (default if no subcommand given)

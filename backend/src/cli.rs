@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// gnomAD Browser Lite — multi-backend genomic data browser
 #[derive(Parser, Debug)]
@@ -6,6 +6,36 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+/// Target backend for the load command.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum TargetBackend {
+    /// Load into DuckDB via Parquet files
+    DuckDb,
+    /// Load into ClickHouse via staging→transform ETL
+    ClickHouse,
+}
+
+/// Table type to load.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum TableType {
+    /// Gene models table
+    Genes,
+    /// Variant sites table
+    Variants,
+}
+
+/// Initialization strategy for ClickHouse table loading.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum InitStrategy {
+    /// Create table if it doesn't exist, fail if it does
+    Create,
+    /// Drop and recreate table (default)
+    #[default]
+    Replace,
+    /// Append to existing table
+    Append,
 }
 
 #[derive(Subcommand, Debug)]
@@ -46,5 +76,56 @@ pub enum Commands {
         /// Generate a JSON schema from the source and write to this file
         #[arg(long)]
         generate_schema: Option<String>,
+    },
+
+    /// Load data from a source into a target backend (ETL pipeline)
+    ///
+    /// For ClickHouse: uses staging→transform→target pattern with embedded SQL.
+    /// For DuckDB: exports to Parquet files that DuckDB reads as views.
+    Load {
+        /// Path to the source Hail table (.ht directory)
+        source: String,
+
+        /// Target backend to load into
+        #[arg(long, value_enum)]
+        target: TargetBackend,
+
+        /// Type of table to load
+        #[arg(long, value_enum)]
+        table_type: TableType,
+
+        /// Optional filter expression appended as WHERE clause (ClickHouse target)
+        /// or applied during export (DuckDB target).
+        /// Example: "locus.contig = 'chr1'"
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// ClickHouse HTTP URL (for ClickHouse target)
+        #[arg(long, default_value = "http://localhost:8123")]
+        clickhouse_url: String,
+
+        /// ClickHouse database name (for ClickHouse target)
+        #[arg(long, default_value = "default")]
+        clickhouse_db: String,
+
+        /// Output directory for Parquet files (for DuckDB target)
+        #[arg(long, default_value = "data")]
+        output_dir: String,
+
+        /// Initialization strategy for ClickHouse tables
+        #[arg(long, value_enum, default_value = "replace")]
+        init_strategy: InitStrategy,
+
+        /// Path to the genohype binary (used for ClickHouse staging export)
+        #[arg(long, default_value = "genohype")]
+        genohype_bin: String,
+
+        /// Keep staging table after transform (for debugging)
+        #[arg(long)]
+        keep_staging: bool,
+
+        /// Row limit for testing (passed to genohype export)
+        #[arg(long)]
+        limit: Option<u64>,
     },
 }

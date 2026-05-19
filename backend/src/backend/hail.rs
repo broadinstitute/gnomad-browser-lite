@@ -3,7 +3,9 @@ use async_trait::async_trait;
 use genohype_core::codec::EncodedValue;
 use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_field};
 use genohype_core::genomic::LocusTable;
-use genohype_core::query::QueryEngine;
+use genohype_core::projection::{FieldPath, ProjectionTree};
+use genohype_core::query::{KeyRange, KeyValue, QueryBound, QueryEngine};
+use std::sync::Arc;
 use tracing::debug;
 
 use super::VariantBackend;
@@ -508,19 +510,44 @@ impl VariantBackend for HailBackend {
         let end_i32 = end as i32;
 
         tokio::task::spawn_blocking(move || -> Result<Vec<Variant>> {
-            let table = LocusTable::open(&variants_path)
+            let engine = QueryEngine::open_path(&variants_path)
                 .context("Failed to open variants table")?;
 
             debug!(
-                "Querying variants for {}:{}-{}",
+                "Querying variants for {}:{}-{} (with projection)",
                 chrom, start_i32, end_i32
             );
 
-            let rows = table
-                .query_interval(&chrom, start_i32, end_i32)
+            // Only decode the lightweight fields needed for the variant list view.
+            // This skips decoding the massive nested exome/genome/joint/quality_metrics structs.
+            let projection = ProjectionTree::from_fields(&[
+                FieldPath::parse("locus").unwrap(),
+                FieldPath::parse("alleles").unwrap(),
+                FieldPath::parse("rsids").unwrap(),
+                FieldPath::parse("variant_id").unwrap(),
+                FieldPath::parse("exome.freq").unwrap(),
+                FieldPath::parse("genome.freq").unwrap(),
+                FieldPath::parse("transcript_consequences").unwrap(),
+            ]);
+
+            let ranges = vec![
+                KeyRange::point_nested(
+                    vec!["locus".to_string(), "contig".to_string()],
+                    KeyValue::String(chrom),
+                ),
+                KeyRange {
+                    field_path: vec!["locus".to_string(), "position".to_string()],
+                    start: QueryBound::Included(KeyValue::Int32(start_i32)),
+                    end: QueryBound::Included(KeyValue::Int32(end_i32)),
+                },
+            ];
+
+            let rows: Vec<EncodedValue> = engine
+                .query_iter_with_projection(&ranges, None, Some(Arc::new(projection)))?
+                .collect::<genohype_core::Result<Vec<_>>>()
                 .context("Failed to query variants interval")?;
 
-            debug!("Got {} raw rows from Hail table", rows.len());
+            debug!("Got {} raw rows from Hail table (projected)", rows.len());
             let variants: Vec<Variant> = rows.iter().filter_map(extract_variant).collect();
             debug!("Extracted {} variants", variants.len());
 

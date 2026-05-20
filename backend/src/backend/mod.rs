@@ -5,6 +5,7 @@ pub mod tiered;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::stream::{self, BoxStream, StreamExt};
 
 use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
 
@@ -42,4 +43,16 @@ pub trait VariantBackend: Send + Sync {
         variant_id: &str,
         force_fallback: bool,
     ) -> Result<Option<VariantDetails>>;
+
+    /// Stream variants in a genomic region as they are decoded.
+    /// Default implementation calls `get_variants` and wraps the Vec into a stream.
+    async fn stream_variants(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<BoxStream<'static, Result<Variant>>> {
+        let variants = self.get_variants(chrom, start, end, false).await?;
+        Ok(stream::iter(variants.into_iter().map(Ok)).boxed())
+    }
 }

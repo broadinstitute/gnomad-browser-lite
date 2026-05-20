@@ -6,14 +6,16 @@ mod models;
 mod worker;
 
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::Json,
+    response::{Json, Response},
     routing::get,
     Router,
 };
 use bytes::Bytes;
 use clap::Parser;
+use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -234,6 +236,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health", get(health_check))
         .route("/api/gene/:gene_id", get(get_gene))
         .route("/api/gene/:gene_id/variants", get(get_gene_variants))
+        .route("/api/gene/:gene_id/variants/stream", get(stream_gene_variants))
         .route("/api/region/:region_id", get(get_region_variants))
         .route("/api/search", get(search_genes))
         .route("/api/variant/:variant_id", get(get_variant_detail))
@@ -388,6 +391,85 @@ async fn get_gene_variants(
             ))
         }
     }
+}
+
+async fn stream_gene_variants(
+    State(state): State<AppState>,
+    Path(gene_id): Path<String>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    // Look up gene (same logic as get_gene_variants)
+    let gene = {
+        let result = if gene_id.starts_with("ENSG") {
+            state.backend.get_gene(&gene_id).await
+        } else {
+            state.backend.get_gene_by_symbol(&gene_id).await
+        };
+
+        match result {
+            Ok(Some(g)) => g,
+            Ok(None) => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "Gene not found", "gene_id": gene_id })),
+                ))
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                ))
+            }
+        }
+    };
+
+    // Normalize chromosome
+    let chrom = if gene.chrom.starts_with("chr") {
+        gene.chrom.clone()
+    } else {
+        format!("chr{}", gene.chrom)
+    };
+
+    let variant_stream = match state
+        .backend
+        .stream_variants(&chrom, gene.start, gene.stop)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Error starting variant stream for {}: {}", gene_id, e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            ));
+        }
+    };
+
+    // Build NDJSON stream: first line is gene metadata, then one variant per line
+    let gene_line = serde_json::to_string(&json!({ "gene": gene })).unwrap() + "\n";
+
+    let ndjson_stream = async_stream::stream! {
+        yield Ok::<Bytes, std::io::Error>(Bytes::from(gene_line));
+
+        let mut variant_stream = std::pin::pin!(variant_stream);
+        while let Some(result) = variant_stream.next().await {
+            match result {
+                Ok(variant) => {
+                    let mut line = serde_json::to_string(&json!({ "variant": variant })).unwrap();
+                    line.push('\n');
+                    yield Ok(Bytes::from(line));
+                }
+                Err(e) => {
+                    tracing::error!("Error streaming variant: {}", e);
+                    break;
+                }
+            }
+        }
+    };
+
+    Ok(Response::builder()
+        .header("Content-Type", "application/x-ndjson")
+        .body(Body::from_stream(ndjson_stream))
+        .unwrap())
 }
 
 fn parse_region(region_id: &str) -> Option<(String, i64, i64)> {

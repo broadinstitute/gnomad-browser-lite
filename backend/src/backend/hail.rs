@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use futures::stream::{BoxStream, StreamExt};
 use genohype_core::codec::EncodedValue;
 use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_field};
 use genohype_core::metadata::CacheOptions;
@@ -7,6 +8,7 @@ use genohype_core::projection::{FieldPath, ProjectionTree};
 use genohype_core::query::{IntervalList, QueryEngine};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info};
 
 /// Pre-computed projection for variant list view — avoids re-parsing on every request.
@@ -629,5 +631,61 @@ impl VariantBackend for HailBackend {
             Ok(None)
         })
         .await?
+    }
+
+    async fn stream_variants(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<BoxStream<'static, Result<Variant>>> {
+        let variants_engine = Arc::clone(&self.variants_engine);
+        let chrom = chrom.to_string();
+        let start_i32 = start as i32;
+        let end_i32 = end as i32;
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Variant>>(16);
+
+        tokio::task::spawn_blocking(move || {
+            debug!(
+                "Streaming variants for {}:{}-{} (with projection)",
+                chrom, start_i32, end_i32
+            );
+
+            let interval_str = format!("{}:{}-{}", chrom, start_i32, end_i32);
+            let intervals = match IntervalList::from_strings(&[interval_str]) {
+                Ok(i) => i,
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e.into()));
+                    return;
+                }
+            };
+
+            let projection = Arc::clone(&VARIANT_LIST_PROJECTION);
+
+            let iter = match variants_engine.query_iter_with_projection(
+                &[],
+                Some(Arc::new(intervals)),
+                Some(projection),
+            ) {
+                Ok(i) => i,
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e.into()));
+                    return;
+                }
+            };
+
+            for row_result in iter {
+                if let Some(variant) = row_result.ok().and_then(|r| extract_variant(&r)) {
+                    if tx.blocking_send(Ok(variant)).is_err() {
+                        // Receiver dropped (client disconnected)
+                        debug!("Stream receiver dropped, stopping iteration");
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(ReceiverStream::new(rx).boxed())
     }
 }

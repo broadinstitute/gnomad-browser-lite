@@ -269,11 +269,16 @@ export function GenePage() {
           if (source) setStreamSource(source);
           setStreamingStatus('streaming');
 
-          // Fetch exon data in parallel
-          const geneSymbol = geneData.gene_symbol || geneData.gencode_symbol || geneId;
-          api.fetchExonsFromGnomAD(geneSymbol, geneData.canonical_transcript_id)
-            .then(setExons)
-            .catch(() => {});
+          // Use exons from gene data (already in the Hail table) — no external API call needed
+          if (geneData.exons && geneData.exons.length > 0) {
+            setExons(geneData.exons);
+          } else {
+            // Fallback to external gnomAD API if local exons not available
+            const geneSymbol = geneData.gene_symbol || geneData.gencode_symbol || geneId;
+            api.fetchExonsFromGnomAD(geneSymbol, geneData.canonical_transcript_id)
+              .then(setExons)
+              .catch(() => {});
+          }
         },
         onVariants: (batch) => {
           variantsRef.current.push(...batch);

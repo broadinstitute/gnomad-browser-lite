@@ -650,22 +650,30 @@ impl VariantBackend for HailBackend {
         chrom: &str,
         start: i64,
         end: i64,
+        regions: Option<&[(i64, i64)]>,
     ) -> Result<BoxStream<'static, Result<Variant>>> {
         let variants_engine = Arc::clone(&self.variants_engine);
         let chrom = chrom.to_string();
         let start_i32 = start as i32;
         let end_i32 = end as i32;
 
+        // Build interval strings — either from explicit regions or full gene span
+        let interval_strs: Vec<String> = match regions {
+            Some(r) => r.iter()
+                .map(|(s, e)| format!("{}:{}-{}", chrom, s, e))
+                .collect(),
+            None => vec![format!("{}:{}-{}", chrom, start_i32, end_i32)],
+        };
+
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<Variant>>(16);
 
         tokio::task::spawn_blocking(move || {
             debug!(
-                "Streaming variants for {}:{}-{} (with projection)",
-                chrom, start_i32, end_i32
+                "Streaming variants for {} intervals (with projection)",
+                interval_strs.len()
             );
 
-            let interval_str = format!("{}:{}-{}", chrom, start_i32, end_i32);
-            let intervals = match IntervalList::from_strings(&[interval_str]) {
+            let intervals = match IntervalList::from_strings(&interval_strs) {
                 Ok(i) => i,
                 Err(e) => {
                     let _ = tx.blocking_send(Err(e.into()));

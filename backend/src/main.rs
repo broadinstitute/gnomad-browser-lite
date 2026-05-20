@@ -397,9 +397,16 @@ async fn get_gene_variants(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct StreamQuery {
+    /// "full" to fetch entire gene region, default fetches exon regions only
+    mode: Option<String>,
+}
+
 async fn stream_gene_variants(
     State(state): State<AppState>,
     Path(gene_id): Path<String>,
+    Query(params): Query<StreamQuery>,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     // Look up gene (same logic as get_gene_variants)
     let gene = {
@@ -433,9 +440,35 @@ async fn stream_gene_variants(
         format!("chr{}", gene.chrom)
     };
 
+    // Build exon intervals (±50bp shoulder, merged) unless mode=full
+    let is_full = params.mode.as_deref() == Some("full");
+    let exon_regions: Option<Vec<(i64, i64)>> = if !is_full {
+        gene.exons.as_ref().and_then(|exons| {
+            if exons.is_empty() { return None; }
+            let shoulder: i64 = 50;
+            let mut intervals: Vec<(i64, i64)> = exons.iter()
+                .map(|e| ((e.start as i64 - shoulder).max(0), e.stop as i64 + shoulder))
+                .collect();
+            intervals.sort_by_key(|&(s, _)| s);
+            // Merge overlapping intervals
+            let mut merged: Vec<(i64, i64)> = vec![intervals[0]];
+            for &(s, e) in &intervals[1..] {
+                let last = merged.last_mut().unwrap();
+                if s <= last.1 {
+                    last.1 = last.1.max(e);
+                } else {
+                    merged.push((s, e));
+                }
+            }
+            Some(merged)
+        })
+    } else {
+        None
+    };
+
     let variant_stream = match state
         .backend
-        .stream_variants(&chrom, gene.start, gene.stop)
+        .stream_variants(&chrom, gene.start, gene.stop, exon_regions.as_deref())
         .await
     {
         Ok(s) => s,
@@ -464,6 +497,10 @@ async fn stream_gene_variants(
     }
     if let Some(ref si) = state.source_info {
         metadata["source"] = si.clone();
+    }
+    metadata["mode"] = json!(if is_full { "full" } else { "exons" });
+    if let Some(ref regions) = exon_regions {
+        metadata["region_count"] = json!(regions.len());
     }
     let gene_line = serde_json::to_string(&metadata).unwrap() + "\n";
 

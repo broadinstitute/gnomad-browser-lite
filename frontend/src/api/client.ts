@@ -167,9 +167,11 @@ export interface StreamCallbacks {
 export async function streamGeneVariants(
   geneId: string,
   callbacks: StreamCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mode?: 'exons' | 'full'
 ): Promise<void> {
-  const url = `${API_BASE}/api/gene/${encodeURIComponent(geneId)}/variants/stream`;
+  const modeParam = mode === 'full' ? '?mode=full' : '';
+  const url = `${API_BASE}/api/gene/${encodeURIComponent(geneId)}/variants/stream${modeParam}`;
 
   let response: Response;
   try {

@@ -45,13 +45,16 @@ pub trait VariantBackend: Send + Sync {
     ) -> Result<Option<VariantDetails>>;
 
     /// Stream variants in a genomic region as they are decoded.
+    /// If `regions` is provided, only query those sub-regions (e.g., exon intervals).
     /// Default implementation calls `get_variants` and wraps the Vec into a stream.
     async fn stream_variants(
         &self,
         chrom: &str,
         start: i64,
         end: i64,
+        regions: Option<&[(i64, i64)]>,
     ) -> Result<BoxStream<'static, Result<Variant>>> {
+        let _ = regions; // default impl ignores regions, fetches full range
         let variants = self.get_variants(chrom, start, end, false).await?;
         Ok(stream::iter(variants.into_iter().map(Ok)).boxed())
     }

@@ -242,16 +242,21 @@ export function GenePage() {
   useEffect(() => {
     if (!geneId) return;
 
+    const isGeneChange = variantsRef.current.length === 0 && !gene;
     const abortController = new AbortController();
     variantsRef.current = [];
     streamDoneRef.current = false;
-    setGene(null);
+    if (isGeneChange) {
+      setGene(null);
+      setExons([]);
+    }
     setVariants([]);
-    setExons([]);
     setError(null);
     setTotalEstimate(null);
     setStreamSource(null);
     setStreamingStatus('loading');
+
+    const mode = showIntrons ? 'full' as const : 'exons' as const;
 
     // 200ms interval to flush accumulated variants to React state
     const flushInterval = setInterval(() => {
@@ -302,13 +307,14 @@ export function GenePage() {
         },
       },
       abortController.signal,
+      mode,
     );
 
     return () => {
       abortController.abort();
       clearInterval(flushInterval);
     };
-  }, [geneId]);
+  }, [geneId, showIntrons]);
 
   if (streamingStatus === 'loading' || (streamingStatus === 'idle' && !gene)) {
     return (

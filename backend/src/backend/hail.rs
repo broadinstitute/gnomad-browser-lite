@@ -2,11 +2,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use genohype_core::codec::EncodedValue;
 use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_field};
-use genohype_core::genomic::LocusTable;
 use genohype_core::metadata::CacheOptions;
 use genohype_core::projection::{FieldPath, ProjectionTree};
 use genohype_core::query::{IntervalList, QueryEngine};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, RwLock};
 use tracing::debug;
 
 /// Pre-computed projection for variant list view — avoids re-parsing on every request.
@@ -19,6 +18,28 @@ static VARIANT_LIST_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(||
         FieldPath::parse("exome.freq").unwrap(),
         FieldPath::parse("genome.freq").unwrap(),
         FieldPath::parse("transcript_consequences").unwrap(),
+    ]))
+});
+
+/// Minimal projection for gene symbol lookups — skips massive transcripts/exons arrays.
+static GENE_SYMBOL_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
+    Arc::new(ProjectionTree::from_fields(&[
+        FieldPath::parse("gene_id").unwrap(),
+        FieldPath::parse("symbol").unwrap(),
+        FieldPath::parse("gene_symbol").unwrap(),
+    ]))
+});
+
+/// Projection for gene search results — includes location fields but skips transcripts/exons.
+static GENE_SEARCH_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
+    Arc::new(ProjectionTree::from_fields(&[
+        FieldPath::parse("gene_id").unwrap(),
+        FieldPath::parse("symbol").unwrap(),
+        FieldPath::parse("gene_symbol").unwrap(),
+        FieldPath::parse("chrom").unwrap(),
+        FieldPath::parse("start").unwrap(),
+        FieldPath::parse("stop").unwrap(),
+        FieldPath::parse("interval").unwrap(),
     ]))
 });
 
@@ -35,8 +56,7 @@ pub const DEFAULT_GENES_PATH: &str =
 
 pub struct HailBackend {
     variants_engine: Arc<QueryEngine>,
-    genes_engine: Arc<Mutex<QueryEngine>>,
-    variants_path: String,
+    genes_engine: Arc<RwLock<QueryEngine>>,
 }
 
 impl HailBackend {
@@ -49,8 +69,7 @@ impl HailBackend {
 
         Ok(Self {
             variants_engine: Arc::new(variants_engine),
-            genes_engine: Arc::new(Mutex::new(genes_engine)),
-            variants_path: variants_path.to_string(),
+            genes_engine: Arc::new(RwLock::new(genes_engine)),
         })
     }
 
@@ -409,7 +428,7 @@ impl VariantBackend for HailBackend {
         let gene_id = gene_id.to_string();
 
         tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
-            let mut engine = genes_engine.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let mut engine = genes_engine.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
 
             // The genes table is keyed by gene_id — use a point lookup
             let key = EncodedValue::Struct(vec![(
@@ -430,26 +449,44 @@ impl VariantBackend for HailBackend {
         let symbol = symbol.to_uppercase();
 
         tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
-            let engine = genes_engine.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
-
-            // Full scan — genes table is keyed by gene_id, not symbol
-            for row_result in engine.query_iter(&[])? {
-                let row = match row_result {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-
-                let row_symbol = get_field(&row, "symbol")
-                    .or_else(|| get_field(&row, "gene_symbol"))
-                    .and_then(as_string);
-                if let Some(s) = row_symbol {
-                    if s.to_uppercase() == symbol {
-                        return Ok(extract_gene(&row));
+            // Pass 1: projected scan to find gene_id (skips transcripts/exons decoding)
+            let gene_id = {
+                let engine = genes_engine.read().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+                let projection = Arc::clone(&GENE_SYMBOL_PROJECTION);
+                let mut found = None;
+                for row_result in engine.query_iter_with_projection(&[], None, Some(projection))? {
+                    let row = match row_result {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+                    let row_symbol = get_field(&row, "symbol")
+                        .or_else(|| get_field(&row, "gene_symbol"))
+                        .and_then(as_string);
+                    if let Some(s) = row_symbol {
+                        if s.to_uppercase() == symbol {
+                            found = get_field(&row, "gene_id").and_then(as_string);
+                            break;
+                        }
                     }
                 }
-            }
+                found
+            };
 
-            Ok(None)
+            // Pass 2: point lookup by gene_id to get the full row
+            match gene_id {
+                Some(id) => {
+                    let mut engine = genes_engine.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+                    let key = EncodedValue::Struct(vec![(
+                        "gene_id".to_string(),
+                        EncodedValue::Binary(id.as_bytes().to_vec()),
+                    )]);
+                    match engine.lookup(&key)? {
+                        Some(row) => Ok(extract_gene(&row)),
+                        None => Ok(None),
+                    }
+                }
+                None => Ok(None),
+            }
         })
         .await?
     }
@@ -459,11 +496,12 @@ impl VariantBackend for HailBackend {
         let query = query.to_uppercase();
 
         tokio::task::spawn_blocking(move || -> Result<Vec<SearchResult>> {
-            let engine = genes_engine.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let engine = genes_engine.read().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
+            let projection = Arc::clone(&GENE_SEARCH_PROJECTION);
 
             let mut results = Vec::new();
 
-            for row_result in engine.query_iter(&[])? {
+            for row_result in engine.query_iter_with_projection(&[], None, Some(projection))? {
                 let row = match row_result {
                     Ok(r) => r,
                     Err(_) => continue,
@@ -541,13 +579,11 @@ impl VariantBackend for HailBackend {
 
             let projection = Arc::clone(&VARIANT_LIST_PROJECTION);
 
-            let rows: Vec<EncodedValue> = variants_engine
+            let variants: Vec<Variant> = variants_engine
                 .query_iter_with_projection(&[], Some(Arc::new(intervals)), Some(projection))?
-                .collect::<genohype_core::Result<Vec<_>>>()
-                .context("Failed to query variants interval")?;
+                .filter_map(|res| res.ok().and_then(|r| extract_variant(&r)))
+                .collect();
 
-            debug!("Got {} raw rows from Hail table (projected)", rows.len());
-            let variants: Vec<Variant> = rows.iter().filter_map(extract_variant).collect();
             debug!("Extracted {} variants", variants.len());
 
             Ok(variants)
@@ -560,7 +596,7 @@ impl VariantBackend for HailBackend {
         variant_id: &str,
         _force_fallback: bool,
     ) -> Result<Option<VariantDetails>> {
-        let variants_path = self.variants_path.clone();
+        let variants_engine = Arc::clone(&self.variants_engine);
 
         // Parse variant_id: "chr1-55039447-G-A" or "1-55039447-G-A"
         let parts: Vec<&str> = variant_id.split('-').collect();
@@ -576,14 +612,31 @@ impl VariantBackend for HailBackend {
         let alt_allele = parts[3..].join("-");
 
         tokio::task::spawn_blocking(move || -> Result<Option<VariantDetails>> {
-            let table = LocusTable::open(&variants_path)
-                .context("Failed to open variants table")?;
+            // Use IntervalList for B-tree index seeking on the persistent engine
+            let interval_str = format!("{}:{}-{}", chrom, pos, pos);
+            let intervals = IntervalList::from_strings(&[interval_str])
+                .context("Failed to parse variant interval")?;
 
-            let rows = table
-                .query_variant(&chrom, pos, Some(&ref_allele), Some(&alt_allele))
-                .context("Failed to query variant")?;
+            for row_result in variants_engine
+                .query_iter_with_intervals(&[], Some(Arc::new(intervals)))?
+            {
+                let row = match row_result {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
 
-            Ok(rows.first().and_then(extract_variant_details))
+                // Filter by alleles to find exact variant match
+                if let Some(alleles) = extract_alleles(&row) {
+                    if alleles.len() >= 2
+                        && alleles[0] == ref_allele
+                        && alleles[1] == alt_allele
+                    {
+                        return Ok(extract_variant_details(&row));
+                    }
+                }
+            }
+
+            Ok(None)
         })
         .await?
     }

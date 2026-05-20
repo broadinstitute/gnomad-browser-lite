@@ -55,7 +55,13 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<Box<dyn VariantBackend>>
             tracing::info!("Initializing Hail backend");
             tracing::info!("  Variants: {}", variants_path);
             tracing::info!("  Genes: {}", genes_path);
-            let backend = HailBackend::new(variants_path, genes_path);
+            let vp = variants_path.clone();
+            let gp = genes_path.clone();
+            // Open tables in a separate thread to avoid blocking tokio runtime
+            // (genohype-core's GCS client uses its own blocking runtime internally)
+            let backend = std::thread::spawn(move || {
+                HailBackend::new(&vp, &gp)
+            }).join().map_err(|_| anyhow::anyhow!("Hail backend init thread panicked"))??;
             Ok(Box::new(backend))
         }
         BackendConfig::ClickHouse { url, database } => {

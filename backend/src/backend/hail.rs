@@ -3,10 +3,24 @@ use async_trait::async_trait;
 use genohype_core::codec::EncodedValue;
 use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_field};
 use genohype_core::genomic::LocusTable;
+use genohype_core::metadata::CacheOptions;
 use genohype_core::projection::{FieldPath, ProjectionTree};
-use genohype_core::query::{IntervalList, KeyRange, KeyValue, QueryBound, QueryEngine};
-use std::sync::Arc;
+use genohype_core::query::{IntervalList, QueryEngine};
+use std::sync::{Arc, LazyLock, Mutex};
 use tracing::debug;
+
+/// Pre-computed projection for variant list view — avoids re-parsing on every request.
+static VARIANT_LIST_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
+    Arc::new(ProjectionTree::from_fields(&[
+        FieldPath::parse("locus").unwrap(),
+        FieldPath::parse("alleles").unwrap(),
+        FieldPath::parse("rsids").unwrap(),
+        FieldPath::parse("variant_id").unwrap(),
+        FieldPath::parse("exome.freq").unwrap(),
+        FieldPath::parse("genome.freq").unwrap(),
+        FieldPath::parse("transcript_consequences").unwrap(),
+    ]))
+});
 
 use super::VariantBackend;
 use crate::models::api::{
@@ -20,19 +34,27 @@ pub const DEFAULT_GENES_PATH: &str =
     "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht";
 
 pub struct HailBackend {
+    variants_engine: Arc<QueryEngine>,
+    genes_engine: Arc<Mutex<QueryEngine>>,
     variants_path: String,
-    genes_path: String,
 }
 
 impl HailBackend {
-    pub fn new(variants_path: &str, genes_path: &str) -> Self {
-        Self {
+    pub fn new(variants_path: &str, genes_path: &str) -> Result<Self> {
+        let cache_opts = Some(CacheOptions::default());
+        let variants_engine = QueryEngine::open_path_cached(variants_path, cache_opts.clone())
+            .context("Failed to open variants table")?;
+        let genes_engine = QueryEngine::open_path_cached(genes_path, cache_opts)
+            .context("Failed to open genes table")?;
+
+        Ok(Self {
+            variants_engine: Arc::new(variants_engine),
+            genes_engine: Arc::new(Mutex::new(genes_engine)),
             variants_path: variants_path.to_string(),
-            genes_path: genes_path.to_string(),
-        }
+        })
     }
 
-    pub fn with_defaults() -> Self {
+    pub fn with_defaults() -> Result<Self> {
         Self::new(DEFAULT_VARIANTS_PATH, DEFAULT_GENES_PATH)
     }
 }
@@ -383,12 +405,11 @@ fn extract_transcript_consequences(row: &EncodedValue) -> Option<Vec<TranscriptC
 #[async_trait]
 impl VariantBackend for HailBackend {
     async fn get_gene(&self, gene_id: &str) -> Result<Option<Gene>> {
-        let genes_path = self.genes_path.clone();
+        let genes_engine = Arc::clone(&self.genes_engine);
         let gene_id = gene_id.to_string();
 
         tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
-            let mut engine =
-                QueryEngine::open_path(&genes_path).context("Failed to open genes table")?;
+            let mut engine = genes_engine.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
 
             // The genes table is keyed by gene_id — use a point lookup
             let key = EncodedValue::Struct(vec![(
@@ -405,12 +426,11 @@ impl VariantBackend for HailBackend {
     }
 
     async fn get_gene_by_symbol(&self, symbol: &str) -> Result<Option<Gene>> {
-        let genes_path = self.genes_path.clone();
+        let genes_engine = Arc::clone(&self.genes_engine);
         let symbol = symbol.to_uppercase();
 
         tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
-            let engine =
-                QueryEngine::open_path(&genes_path).context("Failed to open genes table")?;
+            let engine = genes_engine.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
 
             // Full scan — genes table is keyed by gene_id, not symbol
             for row_result in engine.query_iter(&[])? {
@@ -435,12 +455,11 @@ impl VariantBackend for HailBackend {
     }
 
     async fn search_genes(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        let genes_path = self.genes_path.clone();
+        let genes_engine = Arc::clone(&self.genes_engine);
         let query = query.to_uppercase();
 
         tokio::task::spawn_blocking(move || -> Result<Vec<SearchResult>> {
-            let engine =
-                QueryEngine::open_path(&genes_path).context("Failed to open genes table")?;
+            let engine = genes_engine.lock().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
 
             let mut results = Vec::new();
 
@@ -504,39 +523,26 @@ impl VariantBackend for HailBackend {
         end: i64,
         _force_fallback: bool,
     ) -> Result<Vec<Variant>> {
-        let variants_path = self.variants_path.clone();
+        let variants_engine = Arc::clone(&self.variants_engine);
         let chrom = chrom.to_string();
         let start_i32 = start as i32;
         let end_i32 = end as i32;
 
         tokio::task::spawn_blocking(move || -> Result<Vec<Variant>> {
-            let engine = QueryEngine::open_path(&variants_path)
-                .context("Failed to open variants table")?;
-
             debug!(
                 "Querying variants for {}:{}-{} (with projection)",
                 chrom, start_i32, end_i32
             );
-
-            // Only decode the lightweight fields needed for the variant list view.
-            // This skips decoding the massive nested exome/genome/joint/quality_metrics structs.
-            let projection = ProjectionTree::from_fields(&[
-                FieldPath::parse("locus").unwrap(),
-                FieldPath::parse("alleles").unwrap(),
-                FieldPath::parse("rsids").unwrap(),
-                FieldPath::parse("variant_id").unwrap(),
-                FieldPath::parse("exome.freq").unwrap(),
-                FieldPath::parse("genome.freq").unwrap(),
-                FieldPath::parse("transcript_consequences").unwrap(),
-            ]);
 
             // Use IntervalList for index-based partition seeking (15x faster than KeyRange alone)
             let interval_str = format!("{}:{}-{}", chrom, start_i32, end_i32);
             let intervals = IntervalList::from_strings(&[interval_str])
                 .context("Failed to parse interval")?;
 
-            let rows: Vec<EncodedValue> = engine
-                .query_iter_with_projection(&[], Some(Arc::new(intervals)), Some(Arc::new(projection)))?
+            let projection = Arc::clone(&VARIANT_LIST_PROJECTION);
+
+            let rows: Vec<EncodedValue> = variants_engine
+                .query_iter_with_projection(&[], Some(Arc::new(intervals)), Some(projection))?
                 .collect::<genohype_core::Result<Vec<_>>>()
                 .context("Failed to query variants interval")?;
 

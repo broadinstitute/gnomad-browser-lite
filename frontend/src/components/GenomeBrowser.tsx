@@ -488,13 +488,13 @@ export function GenomeBrowser({
     return linearGenomicScale(viewRegion.start, viewRegion.stop, [0, containerWidth]);
   }, [viewRegion.start, viewRegion.stop, containerWidth]);
 
-  // Create collapsed scale (only exon regions, hiding introns)
+  // Create collapsed scale (only displayed exon regions, hiding introns)
   const collapsedScale = useMemo(() => {
-    if (!exons || exons.length === 0) {
+    if (!displayedExons || displayedExons.length === 0) {
       return fullScale;
     }
     // Filter exons to those within the view region
-    const visibleExons = exons.filter(
+    const visibleExons = displayedExons.filter(
       e => e.stop >= viewRegion.start && e.start <= viewRegion.stop
     );
     if (visibleExons.length === 0) {
@@ -507,7 +507,7 @@ export function GenomeBrowser({
     }));
     const mergedExons = mergeOverlappingRegions(clippedExons);
     return regionViewerScale(mergedExons, [0, containerWidth]);
-  }, [exons, viewRegion.start, viewRegion.stop, containerWidth, fullScale]);
+  }, [displayedExons, viewRegion.start, viewRegion.stop, containerWidth, fullScale]);
 
   // Use appropriate scale based on toggle
   const scale = showIntrons ? fullScale : collapsedScale;

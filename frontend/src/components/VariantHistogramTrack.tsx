@@ -117,7 +117,7 @@ export function VariantHistogramTrack({
     // Find max bin total for Y scale
     const maxTotal = Math.max(1, ...bins.map(b => b.total));
 
-    const plotBottom = height - 20; // leave room for gene model below
+    const plotBottom = height - 5; // leave room for gene model below
     const plotTop = 30;
     const plotHeight = plotBottom - plotTop;
 

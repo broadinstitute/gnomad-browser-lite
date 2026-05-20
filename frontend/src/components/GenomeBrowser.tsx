@@ -612,8 +612,7 @@ export function GenomeBrowser({
       <BrowserHeader>
         <HeaderLeft>
           <BrowserTitle>
-            Variant Distribution ({exonVariantCount.toLocaleString()} variants
-            {!showIntrons && exons && exons.length > 0 && ' in coding regions'})
+            Variant Distribution
           </BrowserTitle>
           <HoverInfo>
             {hoveredVariant ? (

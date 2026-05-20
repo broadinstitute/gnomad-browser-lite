@@ -40,15 +40,17 @@ struct AppState {
     /// Will be None when running with non-DuckDB backends.
     duckdb: Option<Arc<DuckDbBackend>>,
     cache: moka::future::Cache<String, Bytes>,
+    /// Data source metadata for UI display (e.g., Hail table path, partition count)
+    source_info: Option<Value>,
 }
 
 /// Recursively build a backend from the config.
-fn build_backend(cfg: &BackendConfig) -> anyhow::Result<Box<dyn VariantBackend>> {
+fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>, Option<Value>)> {
     match cfg {
         BackendConfig::DuckDb { data_dir } => {
             tracing::info!("Initializing DuckDB backend (data_dir: {})", data_dir);
             let backend = DuckDbBackend::new(&PathBuf::from(data_dir))?;
-            Ok(Box::new(backend))
+            Ok((Box::new(backend), None))
         }
         BackendConfig::Hail {
             variants_path,
@@ -64,7 +66,8 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<Box<dyn VariantBackend>>
             let backend = std::thread::spawn(move || {
                 HailBackend::new(&vp, &gp)
             }).join().map_err(|_| anyhow::anyhow!("Hail backend init thread panicked"))??;
-            Ok(Box::new(backend))
+            let source_info = backend.source_info();
+            Ok((Box::new(backend), Some(source_info)))
         }
         BackendConfig::ClickHouse { url, database } => {
             tracing::info!(
@@ -73,16 +76,16 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<Box<dyn VariantBackend>>
                 database
             );
             let backend = ClickHouseBackend::new(url, database);
-            Ok(Box::new(backend))
+            Ok((Box::new(backend), None))
         }
         BackendConfig::Tiered { fast, fallback } => {
             tracing::info!("Initializing TieredBackend (fast + fallback)");
-            let fast_backend = build_backend(fast)?;
-            let fallback_backend = build_backend(fallback)?;
-            Ok(Box::new(TieredBackend {
+            let (fast_backend, source_info) = build_backend(fast)?;
+            let (fallback_backend, _) = build_backend(fallback)?;
+            Ok((Box::new(TieredBackend {
                 fast: fast_backend,
                 fallback: fallback_backend,
-            }))
+            }), source_info))
         }
     }
 }
@@ -192,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     // Build backend from config, with special handling for DuckDB schema endpoint
-    let (backend, duckdb): (Arc<dyn VariantBackend>, Option<Arc<DuckDbBackend>>) =
+    let (backend, duckdb, source_info): (Arc<dyn VariantBackend>, Option<Arc<DuckDbBackend>>, Option<Value>) =
         match &config.backend {
             BackendConfig::DuckDb { data_dir } => {
                 let db = DuckDbBackend::new(&PathBuf::from(data_dir))?;
@@ -211,11 +214,11 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 let arc = Arc::new(db);
-                (Arc::clone(&arc) as Arc<dyn VariantBackend>, Some(arc))
+                (Arc::clone(&arc) as Arc<dyn VariantBackend>, Some(arc), None)
             }
             other => {
-                let b = build_backend(other)?;
-                (Arc::from(b), None)
+                let (b, si) = build_backend(other)?;
+                (Arc::from(b), None, si)
             }
         };
 
@@ -223,6 +226,7 @@ async fn main() -> anyhow::Result<()> {
         backend,
         duckdb,
         cache,
+        source_info,
     };
 
     // Configure CORS for frontend
@@ -457,6 +461,9 @@ async fn stream_gene_variants(
     let mut metadata = json!({ "gene": gene.clone() });
     if let Some(total) = cached_total {
         metadata["total"] = json!(total);
+    }
+    if let Some(ref si) = state.source_info {
+        metadata["source"] = si.clone();
     }
     let gene_line = serde_json::to_string(&metadata).unwrap() + "\n";
 

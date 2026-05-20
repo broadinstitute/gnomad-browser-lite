@@ -8,6 +8,7 @@ use genohype_core::projection::{FieldPath, ProjectionTree};
 use genohype_core::query::{IntervalList, QueryEngine};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
+use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info};
 
@@ -62,6 +63,7 @@ pub struct HailBackend {
     genes_engine: Arc<RwLock<QueryEngine>>,
     /// symbol (uppercase) → gene_id mapping built at startup
     symbol_to_gene_id: Arc<HashMap<String, String>>,
+    variants_path: String,
 }
 
 impl HailBackend {
@@ -100,6 +102,16 @@ impl HailBackend {
             variants_engine: Arc::new(variants_engine),
             genes_engine: Arc::new(RwLock::new(genes_engine)),
             symbol_to_gene_id: Arc::new(symbol_map),
+            variants_path: variants_path.to_string(),
+        })
+    }
+
+    /// Return metadata about the data source for UI display.
+    pub fn source_info(&self) -> serde_json::Value {
+        json!({
+            "type": "hail",
+            "path": self.variants_path,
+            "total_partitions": self.variants_engine.num_partitions(),
         })
     }
 

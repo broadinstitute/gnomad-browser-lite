@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import styled from 'styled-components';
-import { api, streamGeneVariants } from '../api/client';
+import { api, streamGeneVariants, type StreamSource } from '../api/client';
 import type { Gene, Variant, Exon } from '../api/types';
 import { getGeneSymbol } from '../api/types';
 import { VariantsTable } from '../components/VariantsTable';
@@ -162,6 +162,7 @@ export function GenePage() {
   const [showIntrons, setShowIntrons] = useState(false); // Default: hide introns
   const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
   const [totalEstimate, setTotalEstimate] = useState<number | null>(null);
+  const [streamSource, setStreamSource] = useState<StreamSource | null>(null);
 
   // Ref-based accumulation to avoid O(n²) copies
   const variantsRef = useRef<Variant[]>([]);
@@ -249,6 +250,7 @@ export function GenePage() {
     setExons([]);
     setError(null);
     setTotalEstimate(null);
+    setStreamSource(null);
     setStreamingStatus('loading');
 
     // 200ms interval to flush accumulated variants to React state
@@ -261,9 +263,10 @@ export function GenePage() {
     streamGeneVariants(
       geneId,
       {
-        onMetadata: (geneData, total) => {
+        onMetadata: (geneData, total, source) => {
           setGene(geneData);
           if (total != null) setTotalEstimate(total);
+          if (source) setStreamSource(source);
           setStreamingStatus('streaming');
 
           // Fetch exon data in parallel
@@ -447,6 +450,11 @@ export function GenePage() {
             {totalEstimate != null
               ? `${Math.round((variants.length / totalEstimate) * 100)}%`
               : 'Loading...'}
+            {streamSource && (
+              <span style={{ color: '#999', fontSize: '0.75rem' }}>
+                from {streamSource.path.split('/').pop()?.replace('.ht', '')} ({streamSource.total_partitions} partitions)
+              </span>
+            )}
           </StreamingBadge>
         )}
       </SectionTitle>

@@ -146,8 +146,14 @@ export const api = {
   },
 };
 
+export interface StreamSource {
+  type: string;
+  path: string;
+  total_partitions: number;
+}
+
 export interface StreamCallbacks {
-  onMetadata: (gene: Gene, total?: number) => void;
+  onMetadata: (gene: Gene, total?: number, source?: StreamSource) => void;
   onVariants: (batch: Variant[]) => void;
   onComplete: () => void;
   onError: (err: Error) => void;
@@ -213,7 +219,7 @@ export async function streamGeneVariants(
             const obj = JSON.parse(trimmed);
             if (!metadataReceived && obj.gene) {
               metadataReceived = true;
-              callbacks.onMetadata(obj.gene, obj.total ?? undefined);
+              callbacks.onMetadata(obj.gene, obj.total ?? undefined, obj.source ?? undefined);
             } else if (obj.variant) {
               batch.push(obj.variant);
               // Flush every 200 variants to avoid holding too many in batch

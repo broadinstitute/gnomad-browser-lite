@@ -444,24 +444,55 @@ async fn stream_gene_variants(
         }
     };
 
-    // Build NDJSON stream: first line is gene metadata, then one variant per line
-    let gene_line = serde_json::to_string(&json!({ "gene": gene })).unwrap() + "\n";
+    // Check if we have a cached total from a previous request
+    let cache_key = format!("gene_variants:{}:fb=false", gene_id);
+    let cached_total: Option<usize> = state.cache.get(&cache_key).await.and_then(|bytes| {
+        serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .and_then(|v| v.get("total").and_then(|t| t.as_u64()))
+            .map(|t| t as usize)
+    });
+
+    // Build NDJSON stream: first line is gene metadata (+ total if known), then one variant per line
+    let mut metadata = json!({ "gene": gene.clone() });
+    if let Some(total) = cached_total {
+        metadata["total"] = json!(total);
+    }
+    let gene_line = serde_json::to_string(&metadata).unwrap() + "\n";
+
+    let cache = state.cache.clone();
+    let gene_for_cache = gene.clone();
+    let cache_key_owned = cache_key;
 
     let ndjson_stream = async_stream::stream! {
         yield Ok::<Bytes, std::io::Error>(Bytes::from(gene_line));
 
+        let mut all_variants: Vec<api::Variant> = Vec::new();
         let mut variant_stream = std::pin::pin!(variant_stream);
         while let Some(result) = variant_stream.next().await {
             match result {
                 Ok(variant) => {
                     let mut line = serde_json::to_string(&json!({ "variant": variant })).unwrap();
                     line.push('\n');
+                    all_variants.push(variant);
                     yield Ok(Bytes::from(line));
                 }
                 Err(e) => {
                     tracing::error!("Error streaming variant: {}", e);
                     break;
                 }
+            }
+        }
+
+        // Populate cache after stream completes so refreshes are instant
+        let response = api::GeneVariantsResponse {
+            gene: gene_for_cache,
+            total: all_variants.len(),
+            variants: all_variants,
+        };
+        if let Ok(json_val) = serde_json::to_value(&response) {
+            if let Ok(bytes) = serde_json::to_vec(&json_val) {
+                cache.insert(cache_key_owned, Bytes::from(bytes)).await;
             }
         }
     };

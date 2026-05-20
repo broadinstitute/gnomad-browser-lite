@@ -103,17 +103,46 @@ const Breadcrumb = styled.nav`
 `;
 
 const StreamingBadge = styled.span`
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 0.8rem;
   font-weight: normal;
   color: #1976d2;
   margin-left: 0.75rem;
+`;
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+const ProgressBarContainer = styled.span`
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+  vertical-align: middle;
+`;
+
+const ProgressBarFill = styled.span<{ $percent: number }>`
+  display: block;
+  height: 100%;
+  width: ${p => p.$percent}%;
+  background: #1976d2;
+  border-radius: 3px;
+  transition: width 0.2s ease-out;
+`;
+
+const ProgressBarIndeterminate = styled.span`
+  display: block;
+  height: 100%;
+  width: 30%;
+  background: #1976d2;
+  border-radius: 3px;
+
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
   }
-  animation: pulse 1.5s ease-in-out infinite;
+  animation: slide 1.5s ease-in-out infinite;
 `;
 
 // Helper to check if a position falls within any exon region
@@ -132,6 +161,7 @@ export function GenePage() {
   const [filter, setFilter] = useState<VariantFilter>(DEFAULT_VARIANT_FILTER);
   const [showIntrons, setShowIntrons] = useState(false); // Default: hide introns
   const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+  const [totalEstimate, setTotalEstimate] = useState<number | null>(null);
 
   // Ref-based accumulation to avoid O(n²) copies
   const variantsRef = useRef<Variant[]>([]);
@@ -218,6 +248,7 @@ export function GenePage() {
     setVariants([]);
     setExons([]);
     setError(null);
+    setTotalEstimate(null);
     setStreamingStatus('loading');
 
     // 200ms interval to flush accumulated variants to React state
@@ -230,8 +261,9 @@ export function GenePage() {
     streamGeneVariants(
       geneId,
       {
-        onMetadata: (geneData) => {
+        onMetadata: (geneData, total) => {
           setGene(geneData);
+          if (total != null) setTotalEstimate(total);
           setStreamingStatus('streaming');
 
           // Fetch exon data in parallel
@@ -396,9 +428,25 @@ export function GenePage() {
           <span style={{ fontWeight: 'normal', fontSize: '0.9rem', color: '#666' }}>
             {' '}of {variants.length.toLocaleString()}
           </span>
+        )}
+        {streamingStatus === 'streaming' && totalEstimate != null && (
+          <span style={{ fontWeight: 'normal', fontSize: '0.9rem', color: '#666' }}>
+            {' '}/ {totalEstimate.toLocaleString()}
+          </span>
         )})
         {streamingStatus === 'streaming' && (
-          <StreamingBadge>Streaming...</StreamingBadge>
+          <StreamingBadge>
+            <ProgressBarContainer>
+              {totalEstimate != null ? (
+                <ProgressBarFill $percent={Math.min(100, (variants.length / totalEstimate) * 100)} />
+              ) : (
+                <ProgressBarIndeterminate />
+              )}
+            </ProgressBarContainer>
+            {totalEstimate != null
+              ? `${Math.round((variants.length / totalEstimate) * 100)}%`
+              : 'Loading...'}
+          </StreamingBadge>
         )}
       </SectionTitle>
 

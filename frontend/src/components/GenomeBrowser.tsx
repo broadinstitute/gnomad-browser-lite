@@ -483,6 +483,17 @@ export function GenomeBrowser({
     return () => resizeObserver.disconnect();
   }, []);
 
+  // Filter displayed exons by active feature types
+  const displayedExons = useMemo(() => {
+    if (!exons) return undefined;
+    if (showIntrons) return exons; // show everything in full gene mode
+    return exons.filter(e =>
+      e.feature_type === 'CDS' ||
+      (e.feature_type === 'UTR' && includeUTRs) ||
+      (e.feature_type === 'exon' && includeNonCodingTranscripts)
+    );
+  }, [exons, showIntrons, includeUTRs, includeNonCodingTranscripts]);
+
   // Create full genomic scale (linear, showing introns)
   const fullScale = useMemo(() => {
     return linearGenomicScale(viewRegion.start, viewRegion.stop, [0, containerWidth]);
@@ -519,17 +530,6 @@ export function GenomeBrowser({
     }
     return variants.filter(v => isInExonRegion(getVariantPosition(v), exons)).length;
   }, [variants, exons, showIntrons]);
-
-  // Filter displayed exons by active feature types
-  const displayedExons = useMemo(() => {
-    if (!exons) return undefined;
-    if (showIntrons) return exons; // show everything in full gene mode
-    return exons.filter(e =>
-      e.feature_type === 'CDS' ||
-      (e.feature_type === 'UTR' && includeUTRs) ||
-      (e.feature_type === 'exon' && includeNonCodingTranscripts)
-    );
-  }, [exons, showIntrons, includeUTRs, includeNonCodingTranscripts]);
 
   // Compute effective view mode (auto-switch at 0.75 variants/pixel)
   // Force histogram while streaming to avoid janky lollipop→histogram transition

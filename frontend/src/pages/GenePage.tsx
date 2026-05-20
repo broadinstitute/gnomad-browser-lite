@@ -261,11 +261,9 @@ export function GenePage() {
     setStreamSource(null);
     setStreamingStatus(isGeneChange ? 'loading' : 'streaming');
 
-    // Build the feature types to include in the exon-only query
-    const includeFeatureTypes = ['CDS'];
-    if (includeUTRs) includeFeatureTypes.push('UTR');
-    if (includeNonCodingTranscripts) includeFeatureTypes.push('exon');
-    const mode = showIntrons ? 'full' as const : 'exons' as const;
+    // Always fetch the full gene region — display toggles are client-side only
+    const includeFeatureTypes = ['CDS', 'UTR', 'exon'];
+    const mode = 'full' as const;
 
     // 200ms interval to flush accumulated variants to React state
     const flushInterval = setInterval(() => {
@@ -323,7 +321,10 @@ export function GenePage() {
       abortController.abort();
       clearInterval(flushInterval);
     };
-  }, [geneId, showIntrons, includeUTRs, includeNonCodingTranscripts]);
+  // Only re-fetch when the gene changes. UTR/intron/non-coding toggles are
+  // client-side display filters — the full variant set is already loaded.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geneId]);
 
   if (streamingStatus === 'loading' || (streamingStatus === 'idle' && !gene)) {
     return (

@@ -401,6 +401,8 @@ async fn get_gene_variants(
 struct StreamQuery {
     /// "full" to fetch entire gene region, default fetches exon regions only
     mode: Option<String>,
+    /// Comma-separated exon feature types to include (e.g., "CDS,UTR,exon"). Default: CDS only.
+    include: Option<String>,
 }
 
 async fn stream_gene_variants(
@@ -442,13 +444,18 @@ async fn stream_gene_variants(
 
     // Build exon intervals (±50bp shoulder, merged) unless mode=full
     let is_full = params.mode.as_deref() == Some("full");
+    let include_types: Vec<&str> = params.include.as_deref()
+        .map(|s| s.split(',').collect())
+        .unwrap_or_else(|| vec!["CDS"]);
     let exon_regions: Option<Vec<(i64, i64)>> = if !is_full {
         gene.exons.as_ref().and_then(|exons| {
             if exons.is_empty() { return None; }
             let shoulder: i64 = 50;
             let mut intervals: Vec<(i64, i64)> = exons.iter()
+                .filter(|e| include_types.iter().any(|t| e.feature_type.as_str() == *t))
                 .map(|e| ((e.start as i64 - shoulder).max(0), e.stop as i64 + shoulder))
                 .collect();
+            if intervals.is_empty() { return None; }
             intervals.sort_by_key(|&(s, _)| s);
             // Merge overlapping intervals
             let mut merged: Vec<(i64, i64)> = vec![intervals[0]];

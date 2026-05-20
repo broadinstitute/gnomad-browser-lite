@@ -160,6 +160,8 @@ export function GenePage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<VariantFilter>(DEFAULT_VARIANT_FILTER);
   const [showIntrons, setShowIntrons] = useState(false); // Default: hide introns
+  const [includeUTRs, setIncludeUTRs] = useState(false);
+  const [includeNonCodingTranscripts, setIncludeNonCodingTranscripts] = useState(false);
   const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
   const [totalEstimate, setTotalEstimate] = useState<number | null>(null);
   const [streamSource, setStreamSource] = useState<StreamSource | null>(null);
@@ -256,6 +258,10 @@ export function GenePage() {
     setStreamSource(null);
     setStreamingStatus('loading');
 
+    // Build the feature types to include in the exon-only query
+    const includeFeatureTypes = ['CDS'];
+    if (includeUTRs) includeFeatureTypes.push('UTR');
+    if (includeNonCodingTranscripts) includeFeatureTypes.push('exon');
     const mode = showIntrons ? 'full' as const : 'exons' as const;
 
     // 200ms interval to flush accumulated variants to React state
@@ -307,14 +313,14 @@ export function GenePage() {
         },
       },
       abortController.signal,
-      mode,
+      { mode, includeFeatureTypes },
     );
 
     return () => {
       abortController.abort();
       clearInterval(flushInterval);
     };
-  }, [geneId, showIntrons]);
+  }, [geneId, showIntrons, includeUTRs, includeNonCodingTranscripts]);
 
   if (streamingStatus === 'loading' || (streamingStatus === 'idle' && !gene)) {
     return (
@@ -430,6 +436,10 @@ export function GenePage() {
             region={zoomRegion ?? undefined}
             onRegionChange={handleRegionChange}
             isStreaming={streamingStatus === 'streaming'}
+            includeUTRs={includeUTRs}
+            onIncludeUTRsChange={setIncludeUTRs}
+            includeNonCodingTranscripts={includeNonCodingTranscripts}
+            onIncludeNonCodingTranscriptsChange={setIncludeNonCodingTranscripts}
             selectedVariantIds={selectedVariantIds}
             onToggleVariantSelection={handleToggleVariantSelection}
           />

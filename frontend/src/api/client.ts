@@ -164,14 +164,26 @@ export interface StreamCallbacks {
  * First line is {"gene": ...}, subsequent lines are {"variant": ...}.
  * Batches variants and delivers them via onVariants callback.
  */
+export interface StreamOptions {
+  mode?: 'exons' | 'full';
+  /** Which exon feature types to include (default: CDS only). Ignored when mode=full. */
+  includeFeatureTypes?: string[];
+}
+
 export async function streamGeneVariants(
   geneId: string,
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  mode?: 'exons' | 'full'
+  options?: StreamOptions
 ): Promise<void> {
-  const modeParam = mode === 'full' ? '?mode=full' : '';
-  const url = `${API_BASE}/api/gene/${encodeURIComponent(geneId)}/variants/stream${modeParam}`;
+  const params = new URLSearchParams();
+  if (options?.mode === 'full') {
+    params.set('mode', 'full');
+  } else if (options?.includeFeatureTypes && options.includeFeatureTypes.length > 0) {
+    params.set('include', options.includeFeatureTypes.join(','));
+  }
+  const qs = params.toString();
+  const url = `${API_BASE}/api/gene/${encodeURIComponent(geneId)}/variants/stream${qs ? '?' + qs : ''}`;
 
   let response: Response;
   try {

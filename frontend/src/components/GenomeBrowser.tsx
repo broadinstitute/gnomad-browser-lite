@@ -155,6 +155,12 @@ interface GenomeBrowserProps {
   onRegionChange?: (region: { start: number; stop: number }) => void;
   /** Force histogram mode while data is still streaming in */
   isStreaming?: boolean;
+  /** Include UTR regions in display and query */
+  includeUTRs?: boolean;
+  onIncludeUTRsChange?: (v: boolean) => void;
+  /** Include non-coding transcript exons in display and query */
+  includeNonCodingTranscripts?: boolean;
+  onIncludeNonCodingTranscriptsChange?: (v: boolean) => void;
   /** Set of selected variant IDs */
   selectedVariantIds?: Set<string>;
   /** Callback when a variant selection is toggled */
@@ -446,6 +452,10 @@ export function GenomeBrowser({
   region,
   onRegionChange,
   isStreaming = false,
+  includeUTRs = false,
+  onIncludeUTRsChange,
+  includeNonCodingTranscripts = false,
+  onIncludeNonCodingTranscriptsChange,
   selectedVariantIds,
   onToggleVariantSelection,
 }: GenomeBrowserProps) {
@@ -679,6 +689,26 @@ export function GenomeBrowser({
             >
               {showIntrons ? 'Hide introns' : 'Show full gene'}
             </ToggleButton>
+          )}
+          {!showIntrons && exons && exons.some(e => e.feature_type === 'UTR') && (
+            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={includeUTRs}
+                onChange={e => onIncludeUTRsChange?.(e.target.checked)}
+              />
+              UTRs
+            </label>
+          )}
+          {!showIntrons && exons && exons.some(e => e.feature_type === 'exon') && (
+            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={includeNonCodingTranscripts}
+                onChange={e => onIncludeNonCodingTranscriptsChange?.(e.target.checked)}
+              />
+              Non-coding
+            </label>
           )}
         </HeaderRight>
       </BrowserHeader>

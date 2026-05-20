@@ -415,6 +415,7 @@ export function GenePage() {
             regionUrl={`/region/${regionString}`}
             region={zoomRegion ?? undefined}
             onRegionChange={handleRegionChange}
+            isStreaming={streamingStatus === 'streaming'}
             selectedVariantIds={selectedVariantIds}
             onToggleVariantSelection={handleToggleVariantSelection}
           />

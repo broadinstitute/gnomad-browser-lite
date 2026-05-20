@@ -153,6 +153,8 @@ interface GenomeBrowserProps {
   region?: { start: number; stop: number };
   /** Callback when user selects a new region via drag */
   onRegionChange?: (region: { start: number; stop: number }) => void;
+  /** Force histogram mode while data is still streaming in */
+  isStreaming?: boolean;
   /** Set of selected variant IDs */
   selectedVariantIds?: Set<string>;
   /** Callback when a variant selection is toggled */
@@ -455,6 +457,7 @@ export function GenomeBrowser({
   regionUrl,
   region,
   onRegionChange,
+  isStreaming = false,
   selectedVariantIds,
   onToggleVariantSelection,
 }: GenomeBrowserProps) {
@@ -536,11 +539,13 @@ export function GenomeBrowser({
   }, [variants, exons, showIntrons]);
 
   // Compute effective view mode (auto-switch at 0.75 variants/pixel)
+  // Force histogram while streaming to avoid janky lollipop→histogram transition
   const effectiveViewMode = useMemo(() => {
+    if (isStreaming) return 'histogram';
     if (viewMode !== 'auto') return viewMode;
     const density = exonVariantCount / containerWidth;
     return density > 0.75 ? 'histogram' : 'lollipop';
-  }, [viewMode, exonVariantCount, containerWidth]);
+  }, [viewMode, exonVariantCount, containerWidth, isStreaming]);
 
   // Handle variant hover
   const handleVariantHover = useCallback((variant: Variant | null) => {

@@ -1,6 +1,8 @@
 // API client for gnomAD Browser Lite backend
 
 import type {
+  Gene,
+  Variant,
   GeneResponse,
   GeneVariantsResponse,
   RegionVariantsResponse,
@@ -143,5 +145,99 @@ export const api = {
     }
   },
 };
+
+export interface StreamCallbacks {
+  onMetadata: (gene: Gene) => void;
+  onVariants: (batch: Variant[]) => void;
+  onComplete: () => void;
+  onError: (err: Error) => void;
+}
+
+/**
+ * Stream gene variants via NDJSON endpoint.
+ * First line is {"gene": ...}, subsequent lines are {"variant": ...}.
+ * Batches variants and delivers them via onVariants callback.
+ */
+export async function streamGeneVariants(
+  geneId: string,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const url = `${API_BASE}/api/gene/${encodeURIComponent(geneId)}/variants/stream`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, { signal });
+  } catch (err) {
+    if (signal?.aborted) return;
+    callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+    callbacks.onError(new Error(error.error || `HTTP ${response.status}`));
+    return;
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let metadataReceived = false;
+  let batch: Variant[] = [];
+
+  const flushBatch = () => {
+    if (batch.length > 0) {
+      callbacks.onVariants(batch);
+      batch = [];
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+
+        // Extract complete lines
+        const lines = buffer.split('\n');
+        // Keep incomplete last element in buffer
+        buffer = lines.pop()!;
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          try {
+            const obj = JSON.parse(trimmed);
+            if (!metadataReceived && obj.gene) {
+              metadataReceived = true;
+              callbacks.onMetadata(obj.gene);
+            } else if (obj.variant) {
+              batch.push(obj.variant);
+              // Flush every 200 variants to avoid holding too many in batch
+              if (batch.length >= 200) {
+                flushBatch();
+              }
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      }
+
+      if (done) {
+        flushBatch();
+        callbacks.onComplete();
+        return;
+      }
+    }
+  } catch (err) {
+    if (signal?.aborted) return;
+    flushBatch();
+    callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+  }
+}
 
 export default api;

@@ -5,8 +5,9 @@ use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_f
 use genohype_core::metadata::CacheOptions;
 use genohype_core::projection::{FieldPath, ProjectionTree};
 use genohype_core::query::{IntervalList, QueryEngine};
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Pre-computed projection for variant list view — avoids re-parsing on every request.
 static VARIANT_LIST_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
@@ -57,6 +58,8 @@ pub const DEFAULT_GENES_PATH: &str =
 pub struct HailBackend {
     variants_engine: Arc<QueryEngine>,
     genes_engine: Arc<RwLock<QueryEngine>>,
+    /// symbol (uppercase) → gene_id mapping built at startup
+    symbol_to_gene_id: Arc<HashMap<String, String>>,
 }
 
 impl HailBackend {
@@ -67,9 +70,34 @@ impl HailBackend {
         let genes_engine = QueryEngine::open_path_cached(genes_path, cache_opts)
             .context("Failed to open genes table")?;
 
+        // Build symbol → gene_id index at startup (projected scan, skips transcripts/exons)
+        let projection = Arc::clone(&GENE_SYMBOL_PROJECTION);
+        let mut symbol_map = HashMap::new();
+        for row_result in genes_engine.query_iter_with_projection(&[], None, Some(projection))? {
+            let row = match row_result {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let gene_id = match get_field(&row, "gene_id").and_then(as_string) {
+                Some(id) => id,
+                None => continue,
+            };
+            if let Some(sym) = get_field(&row, "symbol").and_then(as_string) {
+                symbol_map.insert(sym.to_uppercase(), gene_id.clone());
+            }
+            if let Some(sym) = get_field(&row, "gene_symbol").and_then(as_string) {
+                symbol_map.insert(sym.to_uppercase(), gene_id.clone());
+            }
+            if let Some(sym) = get_field(&row, "gencode_symbol").and_then(as_string) {
+                symbol_map.insert(sym.to_uppercase(), gene_id);
+            }
+        }
+        info!("Built gene symbol index: {} symbols", symbol_map.len());
+
         Ok(Self {
             variants_engine: Arc::new(variants_engine),
             genes_engine: Arc::new(RwLock::new(genes_engine)),
+            symbol_to_gene_id: Arc::new(symbol_map),
         })
     }
 
@@ -445,50 +473,12 @@ impl VariantBackend for HailBackend {
     }
 
     async fn get_gene_by_symbol(&self, symbol: &str) -> Result<Option<Gene>> {
-        let genes_engine = Arc::clone(&self.genes_engine);
-        let symbol = symbol.to_uppercase();
-
-        tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
-            // Pass 1: projected scan to find gene_id (skips transcripts/exons decoding)
-            let gene_id = {
-                let engine = genes_engine.read().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
-                let projection = Arc::clone(&GENE_SYMBOL_PROJECTION);
-                let mut found = None;
-                for row_result in engine.query_iter_with_projection(&[], None, Some(projection))? {
-                    let row = match row_result {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
-                    let row_symbol = get_field(&row, "symbol")
-                        .or_else(|| get_field(&row, "gene_symbol"))
-                        .and_then(as_string);
-                    if let Some(s) = row_symbol {
-                        if s.to_uppercase() == symbol {
-                            found = get_field(&row, "gene_id").and_then(as_string);
-                            break;
-                        }
-                    }
-                }
-                found
-            };
-
-            // Pass 2: point lookup by gene_id to get the full row
-            match gene_id {
-                Some(id) => {
-                    let mut engine = genes_engine.write().map_err(|e| anyhow::anyhow!("Lock poisoned: {}", e))?;
-                    let key = EncodedValue::Struct(vec![(
-                        "gene_id".to_string(),
-                        EncodedValue::Binary(id.as_bytes().to_vec()),
-                    )]);
-                    match engine.lookup(&key)? {
-                        Some(row) => Ok(extract_gene(&row)),
-                        None => Ok(None),
-                    }
-                }
-                None => Ok(None),
-            }
-        })
-        .await?
+        let symbol_upper = symbol.to_uppercase();
+        let gene_id = match self.symbol_to_gene_id.get(&symbol_upper) {
+            Some(id) => id.clone(),
+            None => return Ok(None),
+        };
+        self.get_gene(&gene_id).await
     }
 
     async fn search_genes(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {

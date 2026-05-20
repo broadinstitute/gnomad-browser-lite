@@ -118,7 +118,7 @@ export function VariantHistogramTrack({
     const maxTotal = Math.max(1, ...bins.map(b => b.total));
 
     const plotBottom = height - 20; // leave room for gene model below
-    const plotTop = 10;
+    const plotTop = 30;
     const plotHeight = plotBottom - plotTop;
 
     // Draw bars

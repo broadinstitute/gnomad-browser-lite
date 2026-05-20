@@ -739,7 +739,7 @@ export function GenomeBrowser({
                     width={containerWidth}
                     showIntrons={showIntrons}
                   />
-                  <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 500, color: '#333', marginTop: -2 }}>
+                  <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 500, color: '#333', marginTop: -7 }}>
                     {gene.gene_symbol || gene.gencode_symbol || gene.gene_id}
                   </div>
                 </div>

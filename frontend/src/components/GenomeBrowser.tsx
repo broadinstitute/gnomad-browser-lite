@@ -209,18 +209,6 @@ function GeneTrack({ gene, exons, scale, width, showIntrons }: GeneTrackProps) {
 
   return (
     <svg width={width} height={trackHeight}>
-      {/* Gene symbol */}
-      <text
-        x={width / 2}
-        y={10}
-        fontSize={11}
-        fontWeight={500}
-        fill="#333"
-        textAnchor="middle"
-      >
-        {gene.gene_symbol || gene.gencode_symbol || gene.gene_id}
-      </text>
-
       {/* Transcript line - only show when introns are visible */}
       {showIntrons && (
         <line
@@ -742,8 +730,8 @@ export function GenomeBrowser({
                     onVariantClick={onToggleVariantSelection}
                   />
                 )}
-                {/* Gene track at bottom, overlapping the baseline */}
-                <div style={{ marginTop: -25 }}>
+                {/* Gene track at bottom */}
+                <div style={{ marginTop: -10 }}>
                   <GeneTrack
                     gene={gene}
                     exons={exons}
@@ -751,6 +739,9 @@ export function GenomeBrowser({
                     width={containerWidth}
                     showIntrons={showIntrons}
                   />
+                  <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 500, color: '#333', marginTop: -2 }}>
+                    {gene.gene_symbol || gene.gencode_symbol || gene.gene_id}
+                  </div>
                 </div>
               </div>
             </TrackContent>

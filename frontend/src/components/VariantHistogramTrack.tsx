@@ -117,9 +117,7 @@ export function VariantHistogramTrack({
     // Find max bin total for Y scale
     const maxTotal = Math.max(1, ...bins.map(b => b.total));
 
-    // Y-axis area
-    const yAxisWidth = 30;
-    const plotBottom = height - 10;
+    const plotBottom = height - 20; // leave room for gene model below
     const plotTop = 10;
     const plotHeight = plotBottom - plotTop;
 
@@ -140,33 +138,6 @@ export function VariantHistogramTrack({
         ctx.fillRect(bin.pixelStart, yOffset, BIN_WIDTH - 1, barHeight);
       }
     }
-
-    // Draw Y-axis
-    ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(yAxisWidth, plotTop);
-    ctx.lineTo(yAxisWidth, plotBottom);
-    ctx.stroke();
-
-    // Y-axis labels
-    ctx.fillStyle = '#999';
-    ctx.font = '9px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(maxTotal), yAxisWidth - 3, plotTop);
-    ctx.fillText(String(Math.round(maxTotal / 2)), yAxisWidth - 3, plotTop + plotHeight / 2);
-    ctx.fillText('0', yAxisWidth - 3, plotBottom);
-
-    // Tick marks
-    ctx.beginPath();
-    ctx.moveTo(yAxisWidth - 2, plotTop);
-    ctx.lineTo(yAxisWidth, plotTop);
-    ctx.moveTo(yAxisWidth - 2, plotTop + plotHeight / 2);
-    ctx.lineTo(yAxisWidth, plotTop + plotHeight / 2);
-    ctx.moveTo(yAxisWidth - 2, plotBottom);
-    ctx.lineTo(yAxisWidth, plotBottom);
-    ctx.stroke();
   }, [bins, width, height]);
 
   // Hover handling
@@ -187,6 +158,8 @@ export function VariantHistogramTrack({
     onHoverBin?.(null);
   }, [onHoverBin]);
 
+  const maxTotal = useMemo(() => Math.max(1, ...bins.map(b => b.total)), [bins]);
+
   return (
     <div
       ref={containerRef}
@@ -194,6 +167,18 @@ export function VariantHistogramTrack({
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
+      {/* Y-axis max label positioned to the left of the track */}
+      <div style={{
+        position: 'absolute',
+        left: -28,
+        top: 8,
+        fontSize: 9,
+        color: '#999',
+        textAlign: 'right',
+        width: 24,
+      }}>
+        {maxTotal}
+      </div>
       <canvas
         ref={canvasRef}
         width={width}

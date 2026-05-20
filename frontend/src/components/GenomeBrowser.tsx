@@ -55,22 +55,6 @@ const BrowserTitle = styled.h3`
   color: #333;
 `;
 
-const ToggleButton = styled.button<{ $active: boolean }>`
-  padding: 0.375rem 0.75rem;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: ${props => props.$active ? '#e3f2fd' : '#fff'};
-  color: ${props => props.$active ? '#1976d2' : '#666'};
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-
-  &:hover {
-    background: ${props => props.$active ? '#bbdefb' : '#f5f5f5'};
-    border-color: #ccc;
-  }
-`;
-
 const LinkButton = styled(Link)`
   padding: 0.375rem 0.75rem;
   border: 1px solid #ddd;
@@ -536,6 +520,17 @@ export function GenomeBrowser({
     return variants.filter(v => isInExonRegion(getVariantPosition(v), exons)).length;
   }, [variants, exons, showIntrons]);
 
+  // Filter displayed exons by active feature types
+  const displayedExons = useMemo(() => {
+    if (!exons) return undefined;
+    if (showIntrons) return exons; // show everything in full gene mode
+    return exons.filter(e =>
+      e.feature_type === 'CDS' ||
+      (e.feature_type === 'UTR' && includeUTRs) ||
+      (e.feature_type === 'exon' && includeNonCodingTranscripts)
+    );
+  }, [exons, showIntrons, includeUTRs, includeNonCodingTranscripts]);
+
   // Compute effective view mode (auto-switch at 0.75 variants/pixel)
   // Force histogram while streaming to avoid janky lollipop→histogram transition
   const effectiveViewMode = useMemo(() => {
@@ -681,16 +676,7 @@ export function GenomeBrowser({
               View region
             </LinkButton>
           )}
-          {exons && exons.length > 0 && (
-            <ToggleButton
-              $active={showIntrons}
-              onClick={() => setShowIntrons(!showIntrons)}
-              title={showIntrons ? 'Hide intronic regions' : 'Show intronic regions'}
-            >
-              {showIntrons ? 'Hide introns' : 'Show full gene'}
-            </ToggleButton>
-          )}
-          {!showIntrons && exons && exons.some(e => e.feature_type === 'UTR') && (
+          {exons && exons.some(e => e.feature_type === 'UTR') && (
             <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -700,7 +686,7 @@ export function GenomeBrowser({
               UTRs
             </label>
           )}
-          {!showIntrons && exons && exons.some(e => e.feature_type === 'exon') && (
+          {exons && exons.some(e => e.feature_type === 'exon') && (
             <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -708,6 +694,16 @@ export function GenomeBrowser({
                 onChange={e => onIncludeNonCodingTranscriptsChange?.(e.target.checked)}
               />
               Non-coding
+            </label>
+          )}
+          {exons && exons.length > 0 && (
+            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={showIntrons}
+                onChange={e => setShowIntrons(e.target.checked)}
+              />
+              Introns
             </label>
           )}
         </HeaderRight>
@@ -763,7 +759,7 @@ export function GenomeBrowser({
                 <div style={{ marginTop: -10 }}>
                   <GeneTrack
                     gene={gene}
-                    exons={exons}
+                    exons={displayedExons}
                     scale={scale}
                     width={containerWidth}
                     showIntrons={showIntrons}
@@ -784,7 +780,7 @@ export function GenomeBrowser({
             <TrackContent>
               <GeneTrack
                 gene={gene}
-                exons={exons}
+                exons={displayedExons}
                 scale={scale}
                 width={containerWidth}
                 showIntrons={showIntrons}

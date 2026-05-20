@@ -169,6 +169,7 @@ export function GenePage() {
   // Ref-based accumulation to avoid O(n²) copies
   const variantsRef = useRef<Variant[]>([]);
   const streamDoneRef = useRef(false);
+  const prevGeneIdRef = useRef<string | undefined>(undefined);
 
   // Parse zoom region from URL params
   const zoomRegion = useMemo(() => {
@@ -244,7 +245,9 @@ export function GenePage() {
   useEffect(() => {
     if (!geneId) return;
 
-    const isGeneChange = variantsRef.current.length === 0 && !gene;
+    const isGeneChange = geneId !== prevGeneIdRef.current;
+    prevGeneIdRef.current = geneId;
+
     const abortController = new AbortController();
     variantsRef.current = [];
     streamDoneRef.current = false;
@@ -256,7 +259,7 @@ export function GenePage() {
     setError(null);
     setTotalEstimate(null);
     setStreamSource(null);
-    setStreamingStatus('loading');
+    setStreamingStatus(isGeneChange ? 'loading' : 'streaming');
 
     // Build the feature types to include in the exon-only query
     const includeFeatureTypes = ['CDS'];

@@ -1,9 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import styled from 'styled-components';
-import { api } from '../api/client';
-import type { Variant } from '../api/types';
+import type { Gene, Variant } from '../api/types';
 import { VariantsTable } from '../components/VariantsTable';
+import { GenomeBrowser } from '../components/GenomeBrowser';
+import {
+  VariantFilterControls,
+  DEFAULT_VARIANT_FILTER,
+  filterVariants,
+  type VariantFilter,
+} from '../components/VariantFilterControls';
+import { useVariantCache } from '../hooks/useVariantCache';
 
 const Container = styled.div`
   max-width: 1400px;
@@ -86,74 +93,138 @@ const Breadcrumb = styled.nav`
   }
 `;
 
-interface Region {
+const StreamingBadge = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: normal;
+  color: #1976d2;
+  margin-left: 0.75rem;
+`;
+
+const ProgressBarContainer = styled.span`
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+  vertical-align: middle;
+`;
+
+const ProgressBarIndeterminate = styled.span`
+  display: block;
+  height: 100%;
+  width: 30%;
+  background: #1976d2;
+  border-radius: 3px;
+
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+  animation: slide 1.5s ease-in-out infinite;
+`;
+
+interface ParsedRegion {
   chrom: string;
   start: number;
-  end: number;
+  stop: number;
+}
+
+function parseRegionId(regionId: string): ParsedRegion | null {
+  const match = regionId.match(/^(?:chr)?([a-zA-Z0-9]+)[:\-](\d+)-(\d+)$/);
+  if (!match) return null;
+  const chrom = match[1];
+  const start = parseInt(match[2], 10);
+  const stop = parseInt(match[3], 10);
+  if (isNaN(start) || isNaN(stop) || start >= stop) return null;
+  return { chrom, start, stop };
 }
 
 export function RegionPage() {
   const { regionId } = useParams<{ regionId: string }>();
-  const [region, setRegion] = useState<Region | null>(null);
-  const [variants, setVariants] = useState<Variant[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<VariantFilter>(DEFAULT_VARIANT_FILTER);
+  const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+  const prevRegionIdRef = useRef<string | undefined>(regionId);
+  const cache = useVariantCache();
 
-  useEffect(() => {
-    if (!regionId) return;
-
-    const fetchData = async () => {
-      setLoading(true);
-      setError(null);
-
-      try {
-        const response = await api.getRegionVariants(regionId);
-        setRegion(response.region);
-        setVariants(response.variants);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load region data');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
+  const parsedRegion = useMemo(() => {
+    if (!regionId) return null;
+    return parseRegionId(regionId);
   }, [regionId]);
 
-  if (loading) {
-    return (
-      <Container>
-        <LoadingMessage>Loading region data...</LoadingMessage>
-      </Container>
-    );
-  }
+  // Reset cache when region changes
+  useEffect(() => {
+    if (regionId !== prevRegionIdRef.current) {
+      cache.reset();
+      prevRegionIdRef.current = regionId;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regionId]);
 
-  if (error) {
+  // Trigger streaming fetch
+  useEffect(() => {
+    if (!parsedRegion) return;
+    cache.ensureIntervalsCovered(parsedRegion.chrom, [
+      { start: parsedRegion.start, stop: parsedRegion.stop },
+    ]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsedRegion?.chrom, parsedRegion?.start, parsedRegion?.stop]);
+
+  const handleToggleVariantSelection = useCallback((variantId: string) => {
+    setSelectedVariantIds(prev => {
+      const next = new Set(prev);
+      if (next.has(variantId)) {
+        next.delete(variantId);
+      } else {
+        next.add(variantId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedVariantIds(new Set());
+  }, []);
+
+  const variants = cache.variants;
+  const streamingStatus: 'idle' | 'loading' | 'streaming' | 'complete' =
+    cache.isLoading ? 'streaming' : variants.length > 0 ? 'complete' : 'idle';
+
+  const filteredVariants = useMemo(
+    () => filterVariants(variants, filter),
+    [variants, filter],
+  );
+
+  // Synthesize a mock Gene for the GenomeBrowser
+  const mockGene: Gene | null = useMemo(() => {
+    if (!parsedRegion) return null;
+    return {
+      gene_id: regionId || '',
+      gene_symbol: `${parsedRegion.chrom}:${parsedRegion.start.toLocaleString()}-${parsedRegion.stop.toLocaleString()}`,
+      chrom: parsedRegion.chrom,
+      start: parsedRegion.start,
+      stop: parsedRegion.stop,
+    };
+  }, [parsedRegion, regionId]);
+
+  if (!regionId || !parsedRegion) {
     return (
       <Container>
         <Breadcrumb>
           <Link to="/">Home</Link> / Region
         </Breadcrumb>
         <ErrorMessage>
-          <strong>Error:</strong> {error}
+          Invalid region format. Expected: chr1-12345-67890, 1-12345-67890, or chr1:12345-67890
         </ErrorMessage>
       </Container>
     );
   }
 
-  if (!region) {
-    return (
-      <Container>
-        <Breadcrumb>
-          <Link to="/">Home</Link> / Region
-        </Breadcrumb>
-        <ErrorMessage>Region not found</ErrorMessage>
-      </Container>
-    );
-  }
-
-  const regionDisplay = `${region.chrom}:${region.start.toLocaleString()}-${region.end.toLocaleString()}`;
-  const size = region.end - region.start;
+  const regionDisplay = `${parsedRegion.chrom}:${parsedRegion.start.toLocaleString()}-${parsedRegion.stop.toLocaleString()}`;
+  const size = parsedRegion.stop - parsedRegion.start;
 
   return (
     <Container>
@@ -169,15 +240,15 @@ export function RegionPage() {
         <InfoGrid>
           <InfoItem>
             <InfoLabel>Chromosome</InfoLabel>
-            <InfoValue>{region.chrom}</InfoValue>
+            <InfoValue>{parsedRegion.chrom}</InfoValue>
           </InfoItem>
           <InfoItem>
             <InfoLabel>Start</InfoLabel>
-            <InfoValue>{region.start.toLocaleString()}</InfoValue>
+            <InfoValue>{parsedRegion.start.toLocaleString()}</InfoValue>
           </InfoItem>
           <InfoItem>
             <InfoLabel>End</InfoLabel>
-            <InfoValue>{region.end.toLocaleString()}</InfoValue>
+            <InfoValue>{parsedRegion.stop.toLocaleString()}</InfoValue>
           </InfoItem>
           <InfoItem>
             <InfoLabel>Size</InfoLabel>
@@ -186,10 +257,47 @@ export function RegionPage() {
         </InfoGrid>
       </RegionInfo>
 
-      <SectionTitle>Variants ({variants.length.toLocaleString()})</SectionTitle>
+      {mockGene && (variants.length > 0 || streamingStatus === 'streaming') && (
+        <>
+          <GenomeBrowser
+            gene={mockGene}
+            variants={filteredVariants}
+            exons={[]}
+            showIntrons={true}
+            isStreaming={streamingStatus === 'streaming'}
+            selectedVariantIds={selectedVariantIds}
+            onToggleVariantSelection={handleToggleVariantSelection}
+          />
+          <VariantFilterControls value={filter} onChange={setFilter} />
+        </>
+      )}
+
+      <SectionTitle>
+        Variants ({filteredVariants.length.toLocaleString()}
+        {filteredVariants.length !== variants.length && (
+          <span style={{ fontWeight: 'normal', fontSize: '0.9rem', color: '#666' }}>
+            {' '}of {variants.length.toLocaleString()}
+          </span>
+        )})
+        {streamingStatus === 'streaming' && (
+          <StreamingBadge>
+            <ProgressBarContainer>
+              <ProgressBarIndeterminate />
+            </ProgressBarContainer>
+            Loading...
+          </StreamingBadge>
+        )}
+      </SectionTitle>
 
       {variants.length > 0 ? (
-        <VariantsTable variants={variants} />
+        <VariantsTable
+          variants={filteredVariants}
+          selectedVariantIds={selectedVariantIds}
+          onToggleSelection={handleToggleVariantSelection}
+          onClearSelection={handleClearSelection}
+        />
+      ) : streamingStatus === 'streaming' ? (
+        <LoadingMessage>Waiting for variants...</LoadingMessage>
       ) : (
         <LoadingMessage>No variants found in this region.</LoadingMessage>
       )}

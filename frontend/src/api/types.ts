@@ -78,6 +78,7 @@ export interface Variant {
   gene_id?: string;
   gene_symbol?: string;
   transcript_id?: string;
+  lof?: string;
   // Frequency data (flattened from backend)
   ac: number;
   an: number;

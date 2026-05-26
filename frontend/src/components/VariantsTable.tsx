@@ -55,6 +55,18 @@ const ConsequenceMarker = styled.span<{ $color: string }>`
   margin-right: 6px;
 `;
 
+const LofBadge = styled.span<{ $confidence: string }>`
+  display: inline-block;
+  padding: 0 4px;
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  border-radius: 3px;
+  color: #fff;
+  background: ${props => props.$confidence === 'HC' ? '#2E7D32' : '#F57C00'};
+`;
+
 const RsidCell = styled(Cell)`
   color: #185da8;
 `;
@@ -238,6 +250,11 @@ const createColumns = (
       <Cell>
         <ConsequenceMarker $color={getConsequenceColor(row.consequence)} />
         {formatConsequence(row.consequence)}
+        {row.lof && (row.lof === 'HC' || row.lof === 'LC') && (
+          <LofBadge $confidence={row.lof} title={`LOFTEE: ${row.lof === 'HC' ? 'High Confidence' : 'Low Confidence'}`}>
+            {row.lof}
+          </LofBadge>
+        )}
       </Cell>
     ),
   },

@@ -13,6 +13,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info};
 
 /// Pre-computed projection for variant list view — avoids re-parsing on every request.
+/// Includes both gnomAD-native fields and VCF+VEP fields for seamless dual-schema support.
 static VARIANT_LIST_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
     Arc::new(ProjectionTree::from_fields(&[
         FieldPath::parse("locus").unwrap(),
@@ -22,6 +23,9 @@ static VARIANT_LIST_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(||
         FieldPath::parse("exome.freq").unwrap(),
         FieldPath::parse("genome.freq").unwrap(),
         FieldPath::parse("transcript_consequences").unwrap(),
+        // VCF+VEP fields (ignored gracefully when missing)
+        FieldPath::parse("vep").unwrap(),
+        FieldPath::parse("info").unwrap(),
     ]))
 });
 
@@ -219,7 +223,10 @@ fn extract_variant(row: &EncodedValue) -> Option<Variant> {
     let pos = as_i32(get_field(locus, "position")?)? as i64;
 
     let alleles = extract_alleles(row)?;
-    let variant_id = get_field(row, "variant_id").and_then(as_string);
+    // Synthesize variant_id from locus+alleles if missing (VCF sources)
+    let variant_id = get_field(row, "variant_id")
+        .and_then(as_string)
+        .or_else(|| synthesize_variant_id(&contig, pos, &alleles));
     let rsids = extract_string_array(row, "rsids");
 
     let (consequence, hgvsc, hgvsp, gene_id, gene_symbol, transcript_id, lof) =
@@ -252,7 +259,9 @@ fn extract_variant_details(row: &EncodedValue) -> Option<VariantDetails> {
     let pos = as_i32(get_field(locus, "position")?)? as i64;
 
     let alleles = extract_alleles(row)?;
-    let variant_id = get_field(row, "variant_id").and_then(as_string);
+    let variant_id = get_field(row, "variant_id")
+        .and_then(as_string)
+        .or_else(|| synthesize_variant_id(&contig, pos, &alleles));
     let rsids = extract_string_array(row, "rsids");
     let caid = get_field(row, "caid").and_then(as_string);
 
@@ -324,8 +333,31 @@ fn encoded_to_json(value: &EncodedValue) -> Option<serde_json::Value> {
     serde_json::to_value(value).ok()
 }
 
-/// Extract frequency data from the variant. Prefer exome, fall back to genome.
+/// Synthesize a variant_id from locus+alleles (for VCF sources that lack variant_id).
+/// Strips `chr` prefix to match gnomAD-style IDs: "1-55039447-G-A".
+fn synthesize_variant_id(contig: &str, pos: i64, alleles: &[String]) -> Option<String> {
+    if alleles.len() < 2 {
+        return None;
+    }
+    let chrom = contig.strip_prefix("chr").unwrap_or(contig);
+    Some(format!("{}-{}-{}", chrom, pos, alleles.join("-")))
+}
+
+/// Extract a number from an EncodedValue, handling both scalar and array (Number=A) VCF INFO fields.
+fn get_first_number(v: &EncodedValue) -> Option<f64> {
+    match v {
+        EncodedValue::Int32(i) => Some(*i as f64),
+        EncodedValue::Int64(i) => Some(*i as f64),
+        EncodedValue::Float32(f) => Some(*f as f64),
+        EncodedValue::Float64(f) => Some(*f),
+        EncodedValue::Array(arr) => arr.first().and_then(get_first_number),
+        _ => None,
+    }
+}
+
+/// Extract frequency data from the variant. Prefer exome/genome, fall back to VCF INFO AC/AN/AF.
 fn extract_freq(row: &EncodedValue) -> (i64, i64, f64) {
+    // Try gnomAD-native exome/genome freq first
     for dataset in &["exome", "genome"] {
         if let Some(dataset_val) = get_field(row, dataset) {
             if let Some(freq) = get_field(dataset_val, "freq") {
@@ -342,6 +374,25 @@ fn extract_freq(row: &EncodedValue) -> (i64, i64, f64) {
             }
         }
     }
+
+    // Fallback: extract AC/AN/AF from VCF INFO field
+    if let Some(info) = get_field(row, "info") {
+        let ac = get_field(info, "AC")
+            .and_then(get_first_number)
+            .map(|v| v as i64)
+            .unwrap_or(0);
+        let an = get_field(info, "AN")
+            .and_then(get_first_number)
+            .map(|v| v as i64)
+            .unwrap_or(0);
+        let af = get_field(info, "AF")
+            .and_then(get_first_number)
+            .unwrap_or_else(|| if an > 0 { ac as f64 / an as f64 } else { 0.0 });
+        if ac > 0 || an > 0 {
+            return (ac, an, af);
+        }
+    }
+
     (0, 0, 0.0)
 }
 
@@ -381,6 +432,7 @@ fn extract_canonical_consequence(
     Option<String>,
     Option<String>,
 ) {
+    // Try gnomAD-native transcript_consequences first
     if let Some(EncodedValue::Array(tcs)) = get_field(row, "transcript_consequences") {
         let canonical = tcs.iter().find(|tc| {
             get_field(tc, "is_canonical")
@@ -405,10 +457,38 @@ fn extract_canonical_consequence(
             );
         }
     }
+
+    // Fallback: extract from fastVEP `vep` array
+    if let Some(EncodedValue::Array(veps)) = get_field(row, "vep") {
+        let canonical = veps.iter().find(|v| {
+            get_field(v, "canonical")
+                .and_then(|val| match val {
+                    EncodedValue::Boolean(b) => Some(*b),
+                    _ => None,
+                })
+                .unwrap_or(false)
+        });
+
+        let entry = canonical.or_else(|| veps.first());
+
+        if let Some(entry) = entry {
+            return (
+                get_field(entry, "consequence").and_then(as_string),
+                get_field(entry, "hgvsc").and_then(as_string),
+                get_field(entry, "hgvsp").and_then(as_string),
+                get_field(entry, "gene_id").and_then(as_string),
+                get_field(entry, "gene_symbol").and_then(as_string),
+                get_field(entry, "transcript_id").and_then(as_string),
+                get_field(entry, "lof").and_then(as_string),
+            );
+        }
+    }
+
     (None, None, None, None, None, None, None)
 }
 
 fn extract_transcript_consequences(row: &EncodedValue) -> Option<Vec<TranscriptConsequence>> {
+    // Try gnomAD-native transcript_consequences first
     if let Some(EncodedValue::Array(tcs)) = get_field(row, "transcript_consequences") {
         let results: Vec<TranscriptConsequence> = tcs
             .iter()
@@ -449,14 +529,57 @@ fn extract_transcript_consequences(row: &EncodedValue) -> Option<Vec<TranscriptC
                 })
             })
             .collect();
-        if results.is_empty() {
-            None
-        } else {
-            Some(results)
+        if !results.is_empty() {
+            return Some(results);
         }
-    } else {
-        None
     }
+
+    // Fallback: map fastVEP `vep` array to TranscriptConsequence structs
+    if let Some(EncodedValue::Array(veps)) = get_field(row, "vep") {
+        let results: Vec<TranscriptConsequence> = veps
+            .iter()
+            .filter_map(|entry| {
+                let gene_id = get_field(entry, "gene_id").and_then(as_string)?;
+                let gene_symbol = get_field(entry, "gene_symbol").and_then(as_string)?;
+                let transcript_id = get_field(entry, "transcript_id").and_then(as_string)?;
+                let consequence = get_field(entry, "consequence").and_then(as_string)?;
+
+                // Split "&"-joined consequences into terms
+                let consequence_terms: Vec<String> =
+                    consequence.split('&').map(|s| s.to_string()).collect();
+
+                Some(TranscriptConsequence {
+                    gene_id,
+                    gene_symbol,
+                    transcript_id,
+                    transcript_version: None,
+                    consequence_terms: Some(consequence_terms),
+                    major_consequence: consequence,
+                    hgvsc: get_field(entry, "hgvsc").and_then(as_string),
+                    hgvsp: get_field(entry, "hgvsp").and_then(as_string),
+                    is_canonical: get_field(entry, "canonical").and_then(|v| match v {
+                        EncodedValue::Boolean(b) => Some(*b),
+                        _ => None,
+                    }),
+                    is_mane_select: get_field(entry, "mane_select")
+                        .and_then(as_string)
+                        .map(|_| true),
+                    is_mane_select_version: None,
+                    lof: get_field(entry, "lof").and_then(as_string),
+                    lof_filter: get_field(entry, "lof_filter").and_then(as_string),
+                    lof_flags: get_field(entry, "lof_flags").and_then(as_string),
+                    domains: None,
+                    refseq_id: None,
+                    biotype: get_field(entry, "biotype").and_then(as_string),
+                })
+            })
+            .collect();
+        if !results.is_empty() {
+            return Some(results);
+        }
+    }
+
+    None
 }
 
 // ============================================================================

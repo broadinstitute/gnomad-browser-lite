@@ -70,11 +70,33 @@ pub struct HailBackend {
     variants_path: String,
 }
 
+/// Optional VEP annotation config for on-the-fly annotation of VCF sources.
+pub struct VepConfig {
+    pub gff3: String,
+    pub fasta: Option<String>,
+}
+
 impl HailBackend {
-    pub fn new(variants_path: &str, genes_path: &str) -> Result<Self> {
+    pub fn new(variants_path: &str, genes_path: &str, vep: Option<VepConfig>) -> Result<Self> {
         let cache_opts = Some(CacheOptions::default());
-        let variants_engine = QueryEngine::open_path_cached(variants_path, cache_opts.clone())
+        let mut variants_engine = QueryEngine::open_path_cached(variants_path, cache_opts.clone())
             .context("Failed to open variants table")?;
+
+        // Wrap with AnnotatingDataSource for on-the-fly VEP annotation
+        if let Some(vep_cfg) = vep {
+            use genohype_core::datasource::annotating::VepInitOptions;
+            info!("Enabling on-the-fly VEP annotation (GFF3: {})", vep_cfg.gff3);
+            let options = VepInitOptions {
+                gff3: vep_cfg.gff3,
+                fasta: vep_cfg.fasta,
+                sa_dir: None,
+                distance: 5000,
+                pick: false,
+            };
+            variants_engine = variants_engine.with_vep(options)
+                .context("Failed to initialize VEP annotation wrapper")?;
+        }
+
         let genes_engine = QueryEngine::open_path_cached(genes_path, cache_opts)
             .context("Failed to open genes table")?;
 
@@ -120,7 +142,7 @@ impl HailBackend {
     }
 
     pub fn with_defaults() -> Result<Self> {
-        Self::new(DEFAULT_VARIANTS_PATH, DEFAULT_GENES_PATH)
+        Self::new(DEFAULT_VARIANTS_PATH, DEFAULT_GENES_PATH, None)
     }
 }
 
@@ -331,6 +353,22 @@ fn extract_string_array(row: &EncodedValue, field: &str) -> Option<Vec<String>> 
 
 fn encoded_to_json(value: &EncodedValue) -> Option<serde_json::Value> {
     serde_json::to_value(value).ok()
+}
+
+/// Create interval strings with both chr-prefixed and bare contig forms,
+/// so queries match both HT (chr1) and VCF (1) sources.
+fn dual_contig_intervals(chrom: &str, intervals: &[(i32, i32)]) -> Vec<String> {
+    let alt_chrom = if chrom.starts_with("chr") {
+        chrom.strip_prefix("chr").unwrap().to_string()
+    } else {
+        format!("chr{}", chrom)
+    };
+    let mut result = Vec::with_capacity(intervals.len() * 2);
+    for (start, end) in intervals {
+        result.push(format!("{}:{}-{}", chrom, start, end));
+        result.push(format!("{}:{}-{}", alt_chrom, start, end));
+    }
+    result
 }
 
 /// Synthesize a variant_id from locus+alleles (for VCF sources that lack variant_id).
@@ -699,9 +737,9 @@ impl VariantBackend for HailBackend {
                 chrom, start_i32, end_i32
             );
 
-            // Use IntervalList for index-based partition seeking (15x faster than KeyRange alone)
-            let interval_str = format!("{}:{}-{}", chrom, start_i32, end_i32);
-            let intervals = IntervalList::from_strings(&[interval_str])
+            // Use IntervalList with both contig forms (chr1 and 1) for HT/VCF compatibility
+            let interval_strs = dual_contig_intervals(&chrom, &[(start_i32, end_i32)]);
+            let intervals = IntervalList::from_strings(&interval_strs)
                 .context("Failed to parse interval")?;
 
             let projection = Arc::clone(&VARIANT_LIST_PROJECTION);
@@ -731,12 +769,7 @@ impl VariantBackend for HailBackend {
             anyhow::bail!("Invalid variant ID format: {}", variant_id);
         }
 
-        let raw_chrom = parts[0];
-        let chrom = if raw_chrom.starts_with("chr") {
-            raw_chrom.to_string()
-        } else {
-            format!("chr{}", raw_chrom)
-        };
+        let raw_chrom = parts[0].to_string();
         let pos: i32 = parts[1]
             .parse()
             .context("Invalid position in variant ID")?;
@@ -744,9 +777,9 @@ impl VariantBackend for HailBackend {
         let alt_allele = parts[3..].join("-");
 
         tokio::task::spawn_blocking(move || -> Result<Option<VariantDetails>> {
-            // Use IntervalList for B-tree index seeking on the persistent engine
-            let interval_str = format!("{}:{}-{}", chrom, pos, pos);
-            let intervals = IntervalList::from_strings(&[interval_str])
+            // Try both contig forms (chr1 and 1) to handle HT vs VCF sources
+            let interval_strs = dual_contig_intervals(&raw_chrom, &[(pos, pos)]);
+            let intervals = IntervalList::from_strings(&interval_strs)
                 .context("Failed to parse variant interval")?;
 
             for row_result in variants_engine
@@ -785,12 +818,13 @@ impl VariantBackend for HailBackend {
         let start_i32 = start as i32;
         let end_i32 = end as i32;
 
-        // Build interval strings — either from explicit regions or full gene span
+        // Build interval strings with both contig forms for HT/VCF compatibility
         let interval_strs: Vec<String> = match regions {
-            Some(r) => r.iter()
-                .map(|(s, e)| format!("{}:{}-{}", chrom, s, e))
-                .collect(),
-            None => vec![format!("{}:{}-{}", chrom, start_i32, end_i32)],
+            Some(r) => {
+                let pairs: Vec<(i32, i32)> = r.iter().map(|(s, e)| (*s as i32, *e as i32)).collect();
+                dual_contig_intervals(&chrom, &pairs)
+            }
+            None => dual_contig_intervals(&chrom, &[(start_i32, end_i32)]),
         };
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<Variant>>(16);
@@ -850,10 +884,11 @@ impl VariantBackend for HailBackend {
         let end_i32 = end as i32;
 
         let interval_strs: Vec<String> = match regions {
-            Some(r) => r.iter()
-                .map(|(s, e)| format!("{}:{}-{}", chrom, s, e))
-                .collect(),
-            None => vec![format!("{}:{}-{}", chrom, start_i32, end_i32)],
+            Some(r) => {
+                let pairs: Vec<(i32, i32)> = r.iter().map(|(s, e)| (*s as i32, *e as i32)).collect();
+                dual_contig_intervals(&chrom, &pairs)
+            }
+            None => dual_contig_intervals(&chrom, &[(start_i32, end_i32)]),
         };
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<VariantDetails>>(16);

@@ -136,6 +136,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -649,6 +658,7 @@ dependencies = [
  "genohype-core",
  "genohype-pool",
  "moka",
+ "pulldown-cmark",
  "rlimit",
  "serde",
  "serde_json",
@@ -673,12 +683,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.8.0",
 ]
 
 [[package]]
@@ -686,6 +705,15 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
+name = "bit-vec"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bitflags"
@@ -1109,6 +1137,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "dirs"
 version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1250,6 +1289,131 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastvep-annotate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastvep-cache",
+ "fastvep-classification",
+ "fastvep-consequence",
+ "fastvep-core",
+ "fastvep-genome",
+ "fastvep-hgvs",
+ "fastvep-io",
+ "fastvep-loftee",
+ "fastvep-sa",
+ "flate2",
+ "rayon",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "fastvep-cache"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "fastvep-core",
+ "fastvep-genome",
+ "flate2",
+ "log",
+ "memmap2",
+ "noodles-bgzf 0.46.0",
+ "noodles-core 0.19.0",
+ "noodles-csi 0.55.0",
+ "noodles-tabix 0.61.0",
+ "serde",
+ "serde_json",
+ "zstd",
+]
+
+[[package]]
+name = "fastvep-classification"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastvep-core",
+ "log",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "fastvep-consequence"
+version = "0.1.0"
+dependencies = [
+ "fastvep-core",
+ "fastvep-genome",
+ "log",
+]
+
+[[package]]
+name = "fastvep-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "fastvep-genome"
+version = "0.1.0"
+dependencies = [
+ "fastvep-core",
+ "serde",
+]
+
+[[package]]
+name = "fastvep-hgvs"
+version = "0.1.0"
+dependencies = [
+ "fastvep-core",
+ "fastvep-genome",
+]
+
+[[package]]
+name = "fastvep-io"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastvep-core",
+ "fastvep-genome",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fastvep-loftee"
+version = "0.1.0"
+dependencies = [
+ "fastvep-cache",
+ "fastvep-core",
+ "fastvep-genome",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fastvep-sa"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "fastvep-cache",
+ "fastvep-core",
+ "log",
+ "lru",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "zip",
+ "zstd",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1284,6 +1448,7 @@ checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1432,6 +1597,9 @@ dependencies = [
  "bytes",
  "crossbeam-channel",
  "dirs",
+ "fastvep-annotate",
+ "fastvep-core",
+ "fastvep-io",
  "flate2",
  "futures",
  "indicatif",
@@ -1470,6 +1638,15 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "getopts"
+version = "0.2.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
+dependencies = [
+ "unicode-width",
 ]
 
 [[package]]
@@ -2268,10 +2445,10 @@ version = "0.91.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abe598fe237b539488e581c7ec5e6a8c253dfddce8425442ed3135adf8a779df"
 dependencies = [
- "noodles-bgzf",
- "noodles-core",
- "noodles-csi",
- "noodles-tabix",
+ "noodles-bgzf 0.36.0",
+ "noodles-core 0.16.0",
+ "noodles-csi 0.44.0",
+ "noodles-tabix 0.50.0",
  "noodles-vcf",
 ]
 
@@ -2288,10 +2465,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "noodles-bgzf"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37290f565045fd2775b549e62dffca7e1afadc70d8d5a3a2ef19609eb3d8193b"
+dependencies = [
+ "bytes",
+ "crossbeam-channel",
+ "flate2",
+]
+
+[[package]]
 name = "noodles-core"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "962b13b79312f773a12ffcb0cdaccab6327f8343b6f440a888eff10c749d52b0"
+dependencies = [
+ "bstr",
+]
+
+[[package]]
+name = "noodles-core"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53e1e8a419dbba0e4000b0e60830b124138c7f2277ad556463506f1a81d32d17"
 dependencies = [
  "bstr",
 ]
@@ -2302,12 +2499,25 @@ version = "0.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45b402963653cacd5df474889a1cfb969e2f66469023836ad3b0a2c75e2b4e7c"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.8.0",
  "bstr",
  "byteorder",
  "indexmap",
- "noodles-bgzf",
- "noodles-core",
+ "noodles-bgzf 0.36.0",
+ "noodles-core 0.16.0",
+]
+
+[[package]]
+name = "noodles-csi"
+version = "0.55.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9c846d8128bd80b18d891b13cb9e0bc1d364429d6ab3ec3c83939f3d32ba105"
+dependencies = [
+ "bit-vec 0.9.1",
+ "bstr",
+ "indexmap",
+ "noodles-bgzf 0.46.0",
+ "noodles-core 0.19.0",
 ]
 
 [[package]]
@@ -2318,9 +2528,22 @@ checksum = "e46ee069d57770840554e3d8bd02e7415b3a2d972cdea7525bea02472032c234"
 dependencies = [
  "byteorder",
  "indexmap",
- "noodles-bgzf",
- "noodles-core",
- "noodles-csi",
+ "noodles-bgzf 0.36.0",
+ "noodles-core 0.16.0",
+ "noodles-csi 0.44.0",
+]
+
+[[package]]
+name = "noodles-tabix"
+version = "0.61.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2443d0852c9618cd4aa8d11bc7c1884285e46aa4466cf5c1e49f3d9756ca7ced"
+dependencies = [
+ "bstr",
+ "indexmap",
+ "noodles-bgzf 0.46.0",
+ "noodles-core 0.19.0",
+ "noodles-csi 0.55.0",
 ]
 
 [[package]]
@@ -2331,10 +2554,10 @@ checksum = "9d68867aeaeda06d1149c85b4ebbefc45d31786f41b34868195ccd9dad7db532"
 dependencies = [
  "indexmap",
  "memchr",
- "noodles-bgzf",
- "noodles-core",
- "noodles-csi",
- "noodles-tabix",
+ "noodles-bgzf 0.36.0",
+ "noodles-core 0.16.0",
+ "noodles-csi 0.44.0",
+ "noodles-tabix 0.50.0",
  "percent-encoding",
 ]
 
@@ -2676,6 +2899,25 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f86ba2052aebccc42cbbb3ed234b8b13ce76f75c3551a303cb2bcffcff12bb14"
+dependencies = [
+ "bitflags 2.10.0",
+ "getopts",
+ "memchr",
+ "pulldown-cmark-escape",
+ "unicase",
+]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "quick-xml"
@@ -4070,6 +4312,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 
 [[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4783,10 +5031,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "zip"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "crossbeam-utils",
+ "displaydoc",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "thiserror 2.0.18",
+ "zopfli",
+]
+
+[[package]]
+name = "zlib-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40990edd51aae2c2b6907af74ffb635029d5788228222c4bb811e9351c0caad3"
+
+[[package]]
 name = "zmij"
 version = "1.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfcd145825aace48cff44a8844de64bf75feec3080e0aa5cdbde72961ae51a65"
+
+[[package]]
+name = "zopfli"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zstd"

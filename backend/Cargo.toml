@@ -20,10 +20,11 @@ anyhow = "1.0"
 async-trait = "0.1"
 moka = { version = "0.12", features = ["future"] }
 bytes = "1.0"
-genohype-core = { path = "../../genohype/core", features = ["genomic", "gcp", "validation"] }
+genohype-core = { path = "../../genohype/core", features = ["genomic", "gcp", "validation", "vep"] }
 rlimit = "0.10"
 clap = { version = "4.4", features = ["derive"] }
 toml = "0.8"
+pulldown-cmark = "0.12"
 clickhouse = { version = "0.12", features = ["time"] }
 genohype-pool = { path = "../../genohype/pool" }
 futures = "0.3"

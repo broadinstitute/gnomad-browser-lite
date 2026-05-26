@@ -34,13 +34,21 @@ const Nav = styled.nav`
 const NavContent = styled.div`
   max-width: 1400px;
   margin: 0 auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 1rem;
 `;
 
+const NavCenter = styled.div`
+  text-align: center;
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--navbar-text-color, white);
+`;
+
 const NavTitle = styled(Link)`
-  color: white;
+  color: var(--navbar-text-color, white);
   text-decoration: none;
   font-weight: 600;
   font-size: 1.1rem;
@@ -49,42 +57,41 @@ const NavTitle = styled(Link)`
   gap: 0.5rem;
 
   &:hover {
-    color: #ccc;
+    color: var(--accent-color, #0066cc);
   }
 `;
 
 const NavLogo = styled.img`
-  height: 24px;
+  height: 40px;
   width: auto;
 `;
 
 const NavLinks = styled.div`
   display: flex;
   gap: 1rem;
-  margin-left: auto;
 `;
 
 const NavLink = styled(Link)`
-  color: #aaa;
+  color: var(--navbar-text-color, #aaa);
   text-decoration: none;
 
   &:hover {
-    color: white;
+    color: var(--accent-color, #0066cc);
   }
 `;
 
 const NavExternalLink = styled.a`
-  color: #aaa;
+  color: var(--navbar-text-color, #aaa);
   text-decoration: none;
 
   &:hover {
-    color: white;
+    color: var(--accent-color, #0066cc);
   }
 `;
 
 function AppContent() {
   const branding = useBranding();
-  const displayName = branding.short_name || branding.name;
+  const displayName = branding.full_title || branding.short_name || branding.name;
 
   return (
     <>
@@ -93,8 +100,8 @@ function AppContent() {
         <NavContent>
           <NavTitle to="/">
             {branding.logo_url && <NavLogo src={branding.logo_url} alt="" />}
-            {displayName}
           </NavTitle>
+          <NavCenter>{displayName}</NavCenter>
           <NavLinks>
             <NavLink to="/">Home</NavLink>
             {branding.external_links?.map((link) => (

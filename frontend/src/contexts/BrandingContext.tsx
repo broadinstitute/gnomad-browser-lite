@@ -27,6 +27,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--navbar-color', branding.navbar_color || '#333');
+    root.style.setProperty('--navbar-text-color', branding.navbar_text_color || '#ffffff');
     root.style.setProperty('--accent-color', branding.accent_color || '#0066cc');
   }, [branding]);
 

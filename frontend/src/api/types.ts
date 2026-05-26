@@ -12,6 +12,7 @@ export interface BrandingConfig {
   short_name?: string;
   full_title?: string;
   navbar_color?: string;
+  navbar_text_color?: string;
   accent_color?: string;
   logo_url?: string;
   favicon_url?: string;

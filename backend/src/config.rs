@@ -18,6 +18,7 @@ pub struct BrandingConfig {
     pub short_name: Option<String>,
     pub full_title: Option<String>,
     pub navbar_color: Option<String>,
+    pub navbar_text_color: Option<String>,
     pub accent_color: Option<String>,
     pub logo_url: Option<String>,
     pub favicon_url: Option<String>,
@@ -40,6 +41,7 @@ impl Default for BrandingConfig {
             short_name: None,
             full_title: None,
             navbar_color: Some("#333".to_string()),
+            navbar_text_color: Some("#ffffff".to_string()),
             accent_color: Some("#0066cc".to_string()),
             logo_url: None,
             favicon_url: None,
@@ -77,6 +79,10 @@ pub enum BackendConfig {
     Hail {
         variants_path: String,
         genes_path: String,
+        /// Path to GFF3 for on-the-fly VEP annotation (enables AnnotatingDataSource wrapping).
+        vep_gff3: Option<String>,
+        /// Path to reference FASTA for HGVS notation (requires vep_gff3).
+        vep_fasta: Option<String>,
     },
     ClickHouse {
         url: String,
@@ -95,21 +101,28 @@ impl Default for Config {
             backend: BackendConfig::Hail {
                 variants_path: DEFAULT_VARIANTS_PATH.to_string(),
                 genes_path: DEFAULT_GENES_PATH.to_string(),
+                vep_gff3: None,
+                vep_fasta: None,
             },
             branding: None,
         }
     }
 }
 
-/// If `value` looks like a file path (doesn't start with `<` or `#`), try to
-/// read it relative to `base_dir` and replace with its contents.
+/// If `value` looks like a file path, read it relative to `base_dir`
+/// and convert markdown to HTML.
 fn resolve_markdown_field(value: &mut Option<String>, base_dir: &Path) {
     let Some(v) = value.as_deref() else { return };
     let trimmed = v.trim();
     if trimmed.ends_with(".md") || trimmed.ends_with(".markdown") || trimmed.ends_with(".txt") {
         let file_path = base_dir.join(trimmed);
         match std::fs::read_to_string(&file_path) {
-            Ok(contents) => *value = Some(contents),
+            Ok(contents) => {
+                let parser = pulldown_cmark::Parser::new(&contents);
+                let mut html = String::new();
+                pulldown_cmark::html::push_html(&mut html, parser);
+                *value = Some(html);
+            }
             Err(e) => {
                 tracing::warn!("Could not read branding file {:?}: {}", file_path, e);
             }

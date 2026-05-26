@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Variant } from '../api/types';
 import type { Region } from '../utils/coordinates';
 import { mergeIntervals, subtractIntervals } from '../utils/intervals';
-import { streamRegionVariants } from '../api/client';
+import { streamRegionVariants, cacheDevBus } from '../api/client';
 
 export interface VariantCache {
   variants: Variant[];
@@ -12,20 +12,48 @@ export interface VariantCache {
   reset: () => void;
 }
 
-export function useVariantCache(): VariantCache {
-  const [variants, setVariants] = useState<Variant[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [fetchedIntervals, setFetchedIntervals] = useState<Region[]>([]);
+// Module-level cache survives component unmount/remount (navigation)
+// Keyed by gene/chrom to avoid stale data across different genes
+let moduleChrom = '';
+let moduleVariantsMap = new Map<string, Variant>();
+let moduleFetchedIntervals: Region[] = [];
+let moduleAbortController: AbortController | null = null;
 
-  const variantsMapRef = useRef<Map<string, Variant>>(new Map());
-  const fetchedIntervalsRef = useRef<Region[]>([]);
-  const abortControllerRef = useRef<AbortController | null>(null);
+export function useVariantCache(): VariantCache {
+  const [variants, setVariants] = useState<Variant[]>(() =>
+    Array.from(moduleVariantsMap.values())
+  );
+  const [isLoading, setIsLoading] = useState(false);
+  const [fetchedIntervals, setFetchedIntervals] = useState<Region[]>(moduleFetchedIntervals);
+
+  // Refs that point to module-level state for use in callbacks
+  const variantsMapRef = useRef(moduleVariantsMap);
+  const fetchedIntervalsRef = useRef(moduleFetchedIntervals);
+
+  // Sync refs with module state on mount
+  useEffect(() => {
+    variantsMapRef.current = moduleVariantsMap;
+    fetchedIntervalsRef.current = moduleFetchedIntervals;
+    setVariants(Array.from(moduleVariantsMap.values()));
+    setFetchedIntervals(moduleFetchedIntervals);
+
+    // Emit initial state to devtool
+    if (moduleVariantsMap.size > 0) {
+      cacheDevBus.emit('cache-state', {
+        intervalCount: moduleFetchedIntervals.length,
+        variantCount: moduleVariantsMap.size,
+      });
+    }
+  }, []);
 
   const reset = useCallback(() => {
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    variantsMapRef.current = new Map();
-    fetchedIntervalsRef.current = [];
+    moduleAbortController?.abort();
+    moduleAbortController = null;
+    moduleVariantsMap = new Map();
+    moduleFetchedIntervals = [];
+    moduleChrom = '';
+    variantsMapRef.current = moduleVariantsMap;
+    fetchedIntervalsRef.current = moduleFetchedIntervals;
     setVariants([]);
     setFetchedIntervals([]);
     setIsLoading(false);
@@ -34,13 +62,31 @@ export function useVariantCache(): VariantCache {
   const ensureIntervalsCovered = useCallback((chrom: string, desired: Region[]) => {
     if (desired.length === 0) return;
 
+    // If chrom changed, reset
+    if (chrom !== moduleChrom && moduleChrom !== '') {
+      moduleVariantsMap = new Map();
+      moduleFetchedIntervals = [];
+      variantsMapRef.current = moduleVariantsMap;
+      fetchedIntervalsRef.current = moduleFetchedIntervals;
+    }
+    moduleChrom = chrom;
+
     const gaps = subtractIntervals(desired, fetchedIntervalsRef.current);
-    if (gaps.length === 0) return;
+    console.log('[VariantCache] ensureIntervalsCovered', { chrom, desired: desired.length, fetched: fetchedIntervalsRef.current.length, gaps: gaps.length, moduleVariants: moduleVariantsMap.size });
+    if (gaps.length === 0) {
+      cacheDevBus.emit('cache-log', {
+        timestamp: Date.now(),
+        url: `frontend-cache://${chrom}/${desired.map(r => `${r.start}-${r.stop}`).join(',')}`,
+        layer: 'frontend',
+        duration: 0,
+      });
+      return;
+    }
 
     // Abort any in-flight request
-    abortControllerRef.current?.abort();
+    moduleAbortController?.abort();
     const controller = new AbortController();
-    abortControllerRef.current = controller;
+    moduleAbortController = controller;
 
     setIsLoading(true);
 
@@ -56,30 +102,39 @@ export function useVariantCache(): VariantCache {
             const key = v.variant_id || `${v.chrom}-${v.pos}-${(v.alleles || []).join('-')}`;
             variantsMapRef.current.set(key, v);
           }
+          moduleVariantsMap = variantsMapRef.current;
           setVariants(Array.from(variantsMapRef.current.values()));
         },
         onComplete: () => {
           // Merge the newly fetched gaps into our tracked intervals
-          fetchedIntervalsRef.current = mergeIntervals([
+          const merged = mergeIntervals([
             ...fetchedIntervalsRef.current,
             ...gaps,
           ]);
-          setFetchedIntervals(fetchedIntervalsRef.current);
+          fetchedIntervalsRef.current = merged;
+          moduleFetchedIntervals = merged;
+          setFetchedIntervals(merged);
           setIsLoading(false);
-          abortControllerRef.current = null;
+          moduleAbortController = null;
+          cacheDevBus.emit('cache-state', {
+            intervalCount: merged.length,
+            variantCount: variantsMapRef.current.size,
+          });
         },
         onError: (err) => {
           if (controller.signal.aborted) return;
           console.error('Variant cache stream error:', err);
           // Still merge what we tried to fetch to avoid re-requesting on error
-          fetchedIntervalsRef.current = mergeIntervals([
+          const merged = mergeIntervals([
             ...fetchedIntervalsRef.current,
             ...gaps,
           ]);
-          setFetchedIntervals(fetchedIntervalsRef.current);
+          fetchedIntervalsRef.current = merged;
+          moduleFetchedIntervals = merged;
+          setFetchedIntervals(merged);
           setVariants(Array.from(variantsMapRef.current.values()));
           setIsLoading(false);
-          abortControllerRef.current = null;
+          moduleAbortController = null;
         },
       },
       controller.signal

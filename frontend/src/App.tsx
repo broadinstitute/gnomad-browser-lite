@@ -4,6 +4,7 @@ import { HomePage } from './pages/HomePage';
 import { GenePage } from './pages/GenePage';
 import { RegionPage } from './pages/RegionPage';
 import { VariantPage } from './pages/VariantPage';
+import { CacheDevTool } from './components/CacheDevTool';
 
 const GlobalStyle = createGlobalStyle`
   * {
@@ -84,6 +85,7 @@ function App() {
           <Route path="/variant/:variantId" element={<VariantPage />} />
         </Routes>
       </main>
+      {import.meta.env.DEV && <CacheDevTool />}
     </BrowserRouter>
   );
 }

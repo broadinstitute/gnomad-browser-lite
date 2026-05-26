@@ -157,7 +157,7 @@ export function GenePage() {
   const [includeNonCodingTranscripts, setIncludeNonCodingTranscripts] = useState(false);
   const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
 
-  const prevGeneIdRef = useRef<string | undefined>(undefined);
+  const prevGeneIdRef = useRef<string | undefined>(geneId);
   const cache = useVariantCache();
 
   // Parse zoom region from URL params

@@ -1,0 +1,22 @@
+[server]
+port = 3001
+vite_port = 5901
+
+[backend]
+type = "hail"
+variants_path = "gs://gcp-public-data--gnomad/release/4.1.1/ht/browser/gnomad.browser.v4.1.1.sites.ht"
+genes_path = "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht"
+
+[branding]
+name = "Canadian Genomic Data Commons"
+short_name = "Canadian Genomic Data Commons"
+full_title = "Canadian Genomic Data Commons Variant Browser"
+navbar_color = "#f5f5f5"
+navbar_text_color = "#333333"
+accent_color = "#c41e3a"
+logo_url = "https://gnomad.broadinstitute.org/assets/images/10ad7acb07742c92af786aacc8b125bd.png"
+homepage_content = "content/homepage.md"
+external_links = [
+  { label = "CGDC Portal", url = "https://genomicdatacommons.ca" },
+  { label = "gnomAD", url = "https://gnomad.broadinstitute.org" },
+]

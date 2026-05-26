@@ -1,0 +1,19 @@
+[server]
+port = 3003
+vite_port = 5903
+
+[backend]
+type = "hail"
+# Raw 100-variant PCSK9 VCF — no annotations, no frequencies
+variants_path = "/Users/msolomon/code/genohype-eco/genohype/data/test/pcsk9_test.vcf"
+genes_path = "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht"
+# On-the-fly VEP annotation via AnnotatingDataSource
+vep_gff3 = "/Users/msolomon/.local/share/fastvep/ref/Homo_sapiens.GRCh38.115.gff3.gz"
+vep_fasta = "/Users/msolomon/.local/share/fastvep/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
+
+[branding]
+name = "VEP Test (PCSK9)"
+short_name = "VEP Test"
+navbar_color = "#2E7D32"
+navbar_text_color = "#ffffff"
+accent_color = "#2E7D32"

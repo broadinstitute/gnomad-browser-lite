@@ -1,0 +1,22 @@
+[server]
+port = 3002
+vite_port = 5902
+
+[backend]
+type = "hail"
+# TODO: Replace with Singapore SG10K dataset path
+variants_path = "gs://gcp-public-data--gnomad/release/4.1.1/ht/browser/gnomad.browser.v4.1.1.sites.ht"
+genes_path = "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht"
+
+[branding]
+name = "SG10K Health"
+short_name = "SG10K"
+full_title = "SG10K Health Variant Browser"
+navbar_color = "#1a237e"
+navbar_text_color = "#ffffff"
+accent_color = "#e53935"
+homepage_content = "content/homepage.md"
+external_links = [
+  { label = "npm.sg", url = "https://www.npm.sg" },
+  { label = "gnomAD", url = "https://gnomad.broadinstitute.org" },
+]

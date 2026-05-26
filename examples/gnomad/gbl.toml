@@ -1,0 +1,13 @@
+[server]
+port = 3000
+vite_port = 5900
+
+[backend]
+type = "hail"
+variants_path = "gs://gcp-public-data--gnomad/release/4.1.1/ht/browser/gnomad.browser.v4.1.1.sites.ht"
+genes_path = "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht"
+
+[branding]
+name = "gnomAD Browser Lite"
+navbar_color = "#333"
+accent_color = "#0066cc"

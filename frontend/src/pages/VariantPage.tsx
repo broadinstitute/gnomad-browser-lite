@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { api } from '../api/client';
 import type { VariantDetails, Population } from '../api/types';
+import { useBranding } from '../contexts/BrandingContext';
 import { PopulationsTable } from '../components/PopulationsTable';
 import { TranscriptConsequenceList } from '../components/TranscriptConsequenceList';
 import { InSilicoPredictors } from '../components/InSilicoPredictors';
@@ -308,6 +309,7 @@ function formatNumber(n?: number): string {
 
 export function VariantPage() {
   const { variantId } = useParams<{ variantId: string }>();
+  const branding = useBranding();
   const [variant, setVariant] = useState<VariantDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -583,6 +585,17 @@ export function VariantPage() {
                 gnomAD
               </ResourceLink>
             </li>
+            {branding.external_links?.map((link) => (
+              <li key={link.url}>
+                <ResourceLink
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {link.label}
+                </ResourceLink>
+              </li>
+            ))}
           </ResourceList>
         </ExternalResourcesSection>
       </TopSection>

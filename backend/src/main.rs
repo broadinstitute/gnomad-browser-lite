@@ -29,7 +29,7 @@ use crate::backend::hail::HailBackend;
 use crate::backend::tiered::TieredBackend;
 use crate::backend::VariantBackend;
 use crate::cli::{Cli, Commands};
-use crate::config::{BackendConfig, Config};
+use crate::config::{BackendConfig, BrandingConfig, Config};
 use crate::models::api;
 
 /// Application state shared across handlers
@@ -42,6 +42,7 @@ struct AppState {
     cache: moka::future::Cache<String, Bytes>,
     /// Data source metadata for UI display (e.g., Hail table path, partition count)
     source_info: Option<Value>,
+    branding: BrandingConfig,
 }
 
 /// Recursively build a backend from the config.
@@ -222,11 +223,14 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+    let branding = config.branding.unwrap_or_default();
+
     let state = AppState {
         backend,
         duckdb,
         cache,
         source_info,
+        branding,
     };
 
     // Configure CORS for frontend
@@ -238,6 +242,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build router
     let app = Router::new()
+        .route("/api/config", get(get_config))
         .route("/api/health", get(health_check))
         .route("/api/gene/:gene_id", get(get_gene))
         .route("/api/gene/:gene_id/variants", get(get_gene_variants))
@@ -290,6 +295,10 @@ async fn health_check() -> Json<Value> {
         "status": "ok",
         "service": "gnomad-browser-lite"
     }))
+}
+
+async fn get_config(State(state): State<AppState>) -> Json<BrandingConfig> {
+    Json(state.branding)
 }
 
 /// Header name for cache status

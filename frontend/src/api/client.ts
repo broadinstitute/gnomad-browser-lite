@@ -9,6 +9,7 @@ import type {
   SearchResponse,
   Exon,
   VariantDetails,
+  BrandingConfig,
 } from './types';
 
 const GNOMAD_API_URL = 'https://gnomad.broadinstitute.org/api';
@@ -82,6 +83,13 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 export const api = {
+  /**
+   * Get branding/theming configuration
+   */
+  async getConfig(): Promise<BrandingConfig> {
+    return fetchJson<BrandingConfig>(`${API_BASE}/api/config`);
+  },
+
   /**
    * Get gene by ID or symbol
    */

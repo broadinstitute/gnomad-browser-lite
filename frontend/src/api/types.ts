@@ -1,5 +1,28 @@
 // Types for gnomAD Browser Lite
 
+// ==================== Branding / White-label Types ====================
+
+export interface ExternalLink {
+  label: string;
+  url: string;
+}
+
+export interface BrandingConfig {
+  name: string;
+  short_name?: string;
+  full_title?: string;
+  navbar_color?: string;
+  accent_color?: string;
+  logo_url?: string;
+  favicon_url?: string;
+  homepage_content?: string;
+  about_content?: string;
+  terms_content?: string;
+  external_links?: ExternalLink[];
+}
+
+// ==================== Data Types ====================
+
 export interface Exon {
   feature_type: 'CDS' | 'UTR' | 'exon';
   start: number;

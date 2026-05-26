@@ -1,13 +1,61 @@
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::backend::hail::{DEFAULT_GENES_PATH, DEFAULT_VARIANTS_PATH};
+
+/// An external link shown in the navbar or on pages.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ExternalLink {
+    pub label: String,
+    pub url: String,
+}
+
+/// White-label branding configuration, loaded from `[branding]` in `gbl.toml`.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BrandingConfig {
+    pub name: String,
+    pub short_name: Option<String>,
+    pub full_title: Option<String>,
+    pub navbar_color: Option<String>,
+    pub accent_color: Option<String>,
+    pub logo_url: Option<String>,
+    pub favicon_url: Option<String>,
+    /// Resolved markdown content for the homepage (read from file during load).
+    #[serde(default)]
+    pub homepage_content: Option<String>,
+    /// Resolved markdown content for the about page.
+    #[serde(default)]
+    pub about_content: Option<String>,
+    /// Resolved markdown content for the terms page.
+    #[serde(default)]
+    pub terms_content: Option<String>,
+    pub external_links: Option<Vec<ExternalLink>>,
+}
+
+impl Default for BrandingConfig {
+    fn default() -> Self {
+        BrandingConfig {
+            name: "gnomAD Browser Lite".to_string(),
+            short_name: None,
+            full_title: None,
+            navbar_color: Some("#333".to_string()),
+            accent_color: Some("#0066cc".to_string()),
+            logo_url: None,
+            favicon_url: None,
+            homepage_content: None,
+            about_content: None,
+            terms_content: None,
+            external_links: None,
+        }
+    }
+}
 
 /// Top-level configuration, typically loaded from `gbl.toml`.
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub backend: BackendConfig,
+    pub branding: Option<BrandingConfig>,
 }
 
 /// Discriminated union for backend selection.
@@ -48,6 +96,23 @@ impl Default for Config {
                 variants_path: DEFAULT_VARIANTS_PATH.to_string(),
                 genes_path: DEFAULT_GENES_PATH.to_string(),
             },
+            branding: None,
+        }
+    }
+}
+
+/// If `value` looks like a file path (doesn't start with `<` or `#`), try to
+/// read it relative to `base_dir` and replace with its contents.
+fn resolve_markdown_field(value: &mut Option<String>, base_dir: &Path) {
+    let Some(v) = value.as_deref() else { return };
+    let trimmed = v.trim();
+    if trimmed.ends_with(".md") || trimmed.ends_with(".markdown") || trimmed.ends_with(".txt") {
+        let file_path = base_dir.join(trimmed);
+        match std::fs::read_to_string(&file_path) {
+            Ok(contents) => *value = Some(contents),
+            Err(e) => {
+                tracing::warn!("Could not read branding file {:?}: {}", file_path, e);
+            }
         }
     }
 }
@@ -57,11 +122,25 @@ impl Config {
     ///
     /// - If `path` is `Some` and the file exists, parse it.
     /// - If `path` is `None` or the file doesn't exist, return `Config::default()`.
+    ///
+    /// Markdown file paths in branding fields are resolved relative to the
+    /// config file's directory.
     pub fn load(path: Option<&str>) -> Result<Self> {
         match path {
             Some(p) if Path::new(p).exists() => {
                 let contents = std::fs::read_to_string(p)?;
-                let config: Config = toml::from_str(&contents)?;
+                let mut config: Config = toml::from_str(&contents)?;
+
+                // Resolve markdown file paths relative to the config file directory
+                if let Some(ref mut branding) = config.branding {
+                    let base_dir = Path::new(p)
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."));
+                    resolve_markdown_field(&mut branding.homepage_content, base_dir);
+                    resolve_markdown_field(&mut branding.about_content, base_dir);
+                    resolve_markdown_field(&mut branding.terms_content, base_dir);
+                }
+
                 Ok(config)
             }
             _ => Ok(Config::default()),

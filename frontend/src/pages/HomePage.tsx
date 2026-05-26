@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { api } from '../api/client';
 import type { SearchResult } from '../api/types';
+import { useBranding } from '../contexts/BrandingContext';
 
 const Container = styled.div`
   max-width: 800px;
@@ -139,8 +140,27 @@ const StatusMessage = styled.div<{ $isError?: boolean }>`
   color: ${(props) => (props.$isError ? '#c00' : '#060')};
 `;
 
+const MarkdownContent = styled.div`
+  margin-top: 2rem;
+  line-height: 1.7;
+
+  h2, h3, h4 {
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  ul {
+    padding-left: 1.5rem;
+  }
+
+  a {
+    color: var(--accent-color, #0066cc);
+  }
+`;
+
 export function HomePage() {
   const navigate = useNavigate();
+  const branding = useBranding();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [showResults, setShowResults] = useState(false);
@@ -193,8 +213,8 @@ export function HomePage() {
 
   return (
     <Container>
-      <Title>gnomAD Browser Lite</Title>
-      <Subtitle>A lightweight variant browser powered by DuckDB</Subtitle>
+      <Title>{branding.full_title || branding.name}</Title>
+      <Subtitle>A lightweight variant browser</Subtitle>
 
       <SearchContainer>
         <SearchInput
@@ -258,6 +278,10 @@ export function HomePage() {
             </QuickLink>
           </LinkGrid>
         </QuickLinks>
+      )}
+
+      {branding.homepage_content && (
+        <MarkdownContent dangerouslySetInnerHTML={{ __html: branding.homepage_content }} />
       )}
     </Container>
   );

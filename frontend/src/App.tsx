@@ -5,6 +5,7 @@ import { GenePage } from './pages/GenePage';
 import { RegionPage } from './pages/RegionPage';
 import { VariantPage } from './pages/VariantPage';
 import { CacheDevTool } from './components/CacheDevTool';
+import { BrandingProvider, useBranding } from './contexts/BrandingContext';
 
 const GlobalStyle = createGlobalStyle`
   * {
@@ -21,12 +22,12 @@ const GlobalStyle = createGlobalStyle`
   }
 
   a {
-    color: #0066cc;
+    color: var(--accent-color, #0066cc);
   }
 `;
 
 const Nav = styled.nav`
-  background: #333;
+  background: var(--navbar-color, #333);
   padding: 1rem;
 `;
 
@@ -43,10 +44,18 @@ const NavTitle = styled(Link)`
   text-decoration: none;
   font-weight: 600;
   font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 
   &:hover {
     color: #ccc;
   }
+`;
+
+const NavLogo = styled.img`
+  height: 24px;
+  width: auto;
 `;
 
 const NavLinks = styled.div`
@@ -64,15 +73,40 @@ const NavLink = styled(Link)`
   }
 `;
 
-function App() {
+const NavExternalLink = styled.a`
+  color: #aaa;
+  text-decoration: none;
+
+  &:hover {
+    color: white;
+  }
+`;
+
+function AppContent() {
+  const branding = useBranding();
+  const displayName = branding.short_name || branding.name;
+
   return (
-    <BrowserRouter>
+    <>
       <GlobalStyle />
       <Nav>
         <NavContent>
-          <NavTitle to="/">gnomAD Browser Lite</NavTitle>
+          <NavTitle to="/">
+            {branding.logo_url && <NavLogo src={branding.logo_url} alt="" />}
+            {displayName}
+          </NavTitle>
           <NavLinks>
             <NavLink to="/">Home</NavLink>
+            {branding.external_links?.map((link) => (
+              <NavExternalLink
+                key={link.url}
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {link.label}
+              </NavExternalLink>
+            ))}
           </NavLinks>
         </NavContent>
       </Nav>
@@ -86,6 +120,16 @@ function App() {
         </Routes>
       </main>
       {import.meta.env.DEV && <CacheDevTool />}
+    </>
+  );
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <BrandingProvider>
+        <AppContent />
+      </BrandingProvider>
     </BrowserRouter>
   );
 }

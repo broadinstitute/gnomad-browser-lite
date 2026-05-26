@@ -16,6 +16,7 @@ import {
 } from '../components/VariantFilterControls';
 import { useVariantCache } from '../hooks/useVariantCache';
 import { mergeIntervals } from '../utils/intervals';
+import { useBranding } from '../contexts/BrandingContext';
 
 const Container = styled.div`
   max-width: 1400px;
@@ -146,6 +147,7 @@ function isInExonRegion(pos: number, exons: Exon[]): boolean {
 
 export function GenePage() {
   const { geneId } = useParams<{ geneId: string }>();
+  const branding = useBranding();
   const [searchParams, setSearchParams] = useSearchParams();
   const [gene, setGene] = useState<Gene | null>(null);
   const [exons, setExons] = useState<Exon[]>([]);
@@ -394,6 +396,18 @@ export function GenePage() {
           >
             UCSC Browser
           </InfoLink>
+          {branding.external_links?.map((link) => (
+            <span key={link.url}>
+              {', '}
+              <InfoLink
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {link.label}
+              </InfoLink>
+            </span>
+          ))}
         </InfoRow>
       </GeneInfo>
 

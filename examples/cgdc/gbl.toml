@@ -4,8 +4,11 @@ vite_port = 5901
 
 [backend]
 type = "hail"
-variants_path = "gs://gcp-public-data--gnomad/release/4.1.1/ht/browser/gnomad.browser.v4.1.1.sites.ht"
+variants_path = "gs://gnomadev-hostseq/release_sites.ht"
 genes_path = "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht"
+# On-the-fly VEP annotation (Canadian HT has minimal VEP — intergenic only)
+vep_gff3 = "/Users/msolomon/.local/share/fastvep/ref/Homo_sapiens.GRCh38.115.gff3.gz"
+vep_fasta = "/Users/msolomon/.local/share/fastvep/ref/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
 
 [branding]
 name = "Canadian Genomic Data Commons"

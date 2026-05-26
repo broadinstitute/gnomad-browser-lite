@@ -26,6 +26,9 @@ static VARIANT_LIST_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(||
         // VCF+VEP fields (ignored gracefully when missing)
         FieldPath::parse("vep").unwrap(),
         FieldPath::parse("info").unwrap(),
+        // Flat freq array (e.g. Canadian CGDC schema)
+        FieldPath::parse("freq").unwrap(),
+        FieldPath::parse("rsid").unwrap(),
     ]))
 });
 
@@ -85,13 +88,14 @@ impl HailBackend {
         // Wrap with AnnotatingDataSource for on-the-fly VEP annotation
         if let Some(vep_cfg) = vep {
             use genohype_core::datasource::annotating::VepInitOptions;
-            info!("Enabling on-the-fly VEP annotation (GFF3: {})", vep_cfg.gff3);
+            info!("Enabling on-the-fly VEP annotation (GFF3: {}, LOFTEE: enabled)", vep_cfg.gff3);
             let options = VepInitOptions {
                 gff3: vep_cfg.gff3,
                 fasta: vep_cfg.fasta,
                 sa_dir: None,
                 distance: 5000,
                 pick: false,
+                loftee: true,
             };
             variants_engine = variants_engine.with_vep(options)
                 .context("Failed to initialize VEP annotation wrapper")?;
@@ -249,7 +253,8 @@ fn extract_variant(row: &EncodedValue) -> Option<Variant> {
     let variant_id = get_field(row, "variant_id")
         .and_then(as_string)
         .or_else(|| synthesize_variant_id(&contig, pos, &alleles));
-    let rsids = extract_string_array(row, "rsids");
+    let rsids = extract_string_array(row, "rsids")
+        .or_else(|| get_field(row, "rsid").and_then(as_string).map(|s| vec![s]));
 
     let (consequence, hgvsc, hgvsp, gene_id, gene_symbol, transcript_id, lof) =
         extract_canonical_consequence(row);
@@ -284,7 +289,8 @@ fn extract_variant_details(row: &EncodedValue) -> Option<VariantDetails> {
     let variant_id = get_field(row, "variant_id")
         .and_then(as_string)
         .or_else(|| synthesize_variant_id(&contig, pos, &alleles));
-    let rsids = extract_string_array(row, "rsids");
+    let rsids = extract_string_array(row, "rsids")
+        .or_else(|| get_field(row, "rsid").and_then(as_string).map(|s| vec![s]));
     let caid = get_field(row, "caid").and_then(as_string);
 
     let (consequence, hgvsc, hgvsp, gene_id, gene_symbol, transcript_id, _lof) =
@@ -417,6 +423,15 @@ fn extract_freq(row: &EncodedValue) -> (i64, i64, f64) {
                 if let Some(result) = get_ac_an_af(freq) {
                     return result;
                 }
+            }
+        }
+    }
+
+    // Fallback: flat freq array (e.g. Canadian CGDC schema: freq[0].AC/AF/AN)
+    if let Some(EncodedValue::Array(freq_arr)) = get_field(row, "freq") {
+        if let Some(first) = freq_arr.first() {
+            if let Some(result) = get_ac_an_af(first) {
+                return result;
             }
         }
     }

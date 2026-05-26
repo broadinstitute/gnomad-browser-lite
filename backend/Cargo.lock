@@ -1600,6 +1600,7 @@ dependencies = [
  "fastvep-annotate",
  "fastvep-core",
  "fastvep-io",
+ "fastvep-loftee",
  "flate2",
  "futures",
  "indicatif",

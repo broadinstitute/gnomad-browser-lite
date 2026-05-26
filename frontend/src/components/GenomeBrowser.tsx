@@ -523,13 +523,17 @@ export function GenomeBrowser({
   // Use appropriate scale based on toggle
   const scale = showIntrons ? fullScale : collapsedScale;
 
-  // Count variants in exon regions
-  const exonVariantCount = useMemo(() => {
-    if (!exons || exons.length === 0 || showIntrons) {
-      return variants.length;
+  // Filter variants to only those within displayed exon regions when introns are hidden.
+  // Without this, intronic variants get squished to exon boundaries by the collapsed scale.
+  const displayedVariants = useMemo(() => {
+    if (showIntrons || !displayedExons || displayedExons.length === 0) {
+      return variants;
     }
-    return variants.filter(v => isInExonRegion(getVariantPosition(v), exons)).length;
-  }, [variants, exons, showIntrons]);
+    return variants.filter(v => isInExonRegion(getVariantPosition(v), displayedExons));
+  }, [variants, showIntrons, displayedExons]);
+
+  // Count displayed variants (already filtered to visible exon regions)
+  const exonVariantCount = displayedVariants.length;
 
   // Compute effective view mode (auto-switch at 0.75 variants/pixel)
   // Force histogram while streaming to avoid janky lollipop→histogram transition
@@ -735,7 +739,7 @@ export function GenomeBrowser({
               <div style={{ position: 'relative' }}>
                 {effectiveViewMode === 'histogram' ? (
                   <VariantHistogramTrack
-                    variants={variants}
+                    variants={displayedVariants}
                     scale={scale}
                     width={containerWidth}
                     exons={exons}
@@ -744,7 +748,7 @@ export function GenomeBrowser({
                   />
                 ) : (
                   <ProteinPaintTrack
-                    variants={variants}
+                    variants={displayedVariants}
                     scale={scale}
                     width={containerWidth}
                     height={300}
@@ -795,7 +799,7 @@ export function GenomeBrowser({
             <TrackLabel>Variants</TrackLabel>
             <TrackContent>
               <VariantTrack
-                variants={variants}
+                variants={displayedVariants}
                 scale={scale}
                 width={containerWidth}
                 exons={exons}

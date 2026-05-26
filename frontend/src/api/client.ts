@@ -15,13 +15,69 @@ const GNOMAD_API_URL = 'https://gnomad.broadinstitute.org/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
+// ==================== Cache Dev Event Bus ====================
+
+export type CacheLayer = 'frontend' | 'moka' | 'miss' | 'prefetch';
+
+export interface CacheLogEntry {
+  timestamp: number;
+  url: string;
+  layer: CacheLayer;
+  duration: number;
+}
+
+export interface CacheStateUpdate {
+  intervalCount: number;
+  variantCount: number;
+}
+
+type CacheEventMap = {
+  'cache-log': CacheLogEntry;
+  'cache-state': CacheStateUpdate;
+};
+
+type CacheEventHandler<K extends keyof CacheEventMap> = (data: CacheEventMap[K]) => void;
+
+class CacheDevBus {
+  private listeners: { [K in keyof CacheEventMap]?: Set<CacheEventHandler<K>> } = {};
+
+  on<K extends keyof CacheEventMap>(event: K, handler: CacheEventHandler<K>) {
+    if (!this.listeners[event]) {
+      (this.listeners[event] as Set<CacheEventHandler<K>>) = new Set();
+    }
+    (this.listeners[event] as Set<CacheEventHandler<K>>).add(handler);
+    return () => (this.listeners[event] as Set<CacheEventHandler<K>>).delete(handler);
+  }
+
+  emit<K extends keyof CacheEventMap>(event: K, data: CacheEventMap[K]) {
+    const handlers = this.listeners[event] as Set<CacheEventHandler<K>> | undefined;
+    if (handlers) {
+      for (const handler of handlers) handler(data);
+    }
+  }
+}
+
+export const cacheDevBus = new CacheDevBus();
+
+// ==================== Fetch helpers ====================
+
 async function fetchJson<T>(url: string): Promise<T> {
+  const start = performance.now();
   const response = await fetch(url);
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
     throw new Error(error.error || `HTTP ${response.status}`);
   }
-  return response.json();
+  const xcache = response.headers.get('x-cache');
+  const layer: CacheLayer = xcache === 'moka-hit' ? 'moka' : 'miss';
+  const result = await response.json();
+  cacheDevBus.emit('cache-log', {
+    timestamp: Date.now(),
+    url,
+    layer,
+    duration: performance.now() - start,
+  });
+  return result;
 }
 
 export const api = {
@@ -185,6 +241,7 @@ export async function streamGeneVariants(
   const qs = params.toString();
   const url = `${API_BASE}/api/gene/${encodeURIComponent(geneId)}/variants/stream${qs ? '?' + qs : ''}`;
 
+  const start = performance.now();
   let response: Response;
   try {
     response = await fetch(url, { signal });
@@ -199,6 +256,14 @@ export async function streamGeneVariants(
     callbacks.onError(new Error(error.error || `HTTP ${response.status}`));
     return;
   }
+
+  const xcache = response.headers.get('x-cache');
+  cacheDevBus.emit('cache-log', {
+    timestamp: Date.now(),
+    url,
+    layer: xcache === 'moka-hit' ? 'moka' : 'miss',
+    duration: performance.now() - start,
+  });
 
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -234,9 +299,110 @@ export async function streamGeneVariants(
             if (!metadataReceived && obj.gene) {
               metadataReceived = true;
               callbacks.onMetadata(obj.gene, obj.total ?? undefined, obj.source ?? undefined);
+            } else if (obj.summary) {
+              if (obj.summary.prefetch_eligible) {
+                cacheDevBus.emit('cache-log', {
+                  timestamp: Date.now(),
+                  url,
+                  layer: 'prefetch',
+                  duration: 0,
+                });
+              }
             } else if (obj.variant) {
               batch.push(obj.variant);
               // Flush every 200 variants to avoid holding too many in batch
+              if (batch.length >= 200) {
+                flushBatch();
+              }
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      }
+
+      if (done) {
+        flushBatch();
+        callbacks.onComplete();
+        return;
+      }
+    }
+  } catch (err) {
+    if (signal?.aborted) return;
+    flushBatch();
+    callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+export interface RegionStreamCallbacks {
+  onMetadata: (meta: { chrom: string; intervals: number; bounding_start: number; bounding_end: number }) => void;
+  onVariants: (batch: Variant[]) => void;
+  onComplete: () => void;
+  onError: (err: Error) => void;
+}
+
+/**
+ * Stream variants for explicit genomic intervals via NDJSON.
+ * First line is metadata, subsequent lines are {"variant": ...}.
+ */
+export async function streamRegionVariants(
+  chrom: string,
+  intervals: { start: number; stop: number }[],
+  callbacks: RegionStreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const intervalStr = intervals.map(r => `${r.start}-${r.stop}`).join(',');
+  const params = new URLSearchParams({ chrom, intervals: intervalStr });
+  const url = `${API_BASE}/api/variants/stream?${params}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, { signal });
+  } catch (err) {
+    if (signal?.aborted) return;
+    callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+    callbacks.onError(new Error(error.error || `HTTP ${response.status}`));
+    return;
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let metadataReceived = false;
+  let batch: Variant[] = [];
+
+  const flushBatch = () => {
+    if (batch.length > 0) {
+      callbacks.onVariants(batch);
+      batch = [];
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop()!;
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          try {
+            const obj = JSON.parse(trimmed);
+            if (!metadataReceived && obj.chrom) {
+              metadataReceived = true;
+              callbacks.onMetadata(obj);
+            } else if (obj.variant) {
+              batch.push(obj.variant);
               if (batch.length >= 200) {
                 flushBatch();
               }

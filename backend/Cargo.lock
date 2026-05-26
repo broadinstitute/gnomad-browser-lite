@@ -1438,6 +1438,7 @@ dependencies = [
  "jsonschema",
  "lru",
  "memmap2",
+ "moka",
  "nom",
  "noodles",
  "object_store",

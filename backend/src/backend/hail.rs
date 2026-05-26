@@ -608,7 +608,12 @@ impl VariantBackend for HailBackend {
             anyhow::bail!("Invalid variant ID format: {}", variant_id);
         }
 
-        let chrom = parts[0].to_string();
+        let raw_chrom = parts[0];
+        let chrom = if raw_chrom.starts_with("chr") {
+            raw_chrom.to_string()
+        } else {
+            format!("chr{}", raw_chrom)
+        };
         let pos: i32 = parts[1]
             .parse()
             .context("Invalid position in variant ID")?;
@@ -700,6 +705,65 @@ impl VariantBackend for HailBackend {
                     if tx.blocking_send(Ok(variant)).is_err() {
                         // Receiver dropped (client disconnected)
                         debug!("Stream receiver dropped, stopping iteration");
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(ReceiverStream::new(rx).boxed())
+    }
+
+    async fn stream_variant_details(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+        regions: Option<&[(i64, i64)]>,
+    ) -> Result<BoxStream<'static, Result<VariantDetails>>> {
+        let variants_engine = Arc::clone(&self.variants_engine);
+        let chrom = chrom.to_string();
+        let start_i32 = start as i32;
+        let end_i32 = end as i32;
+
+        let interval_strs: Vec<String> = match regions {
+            Some(r) => r.iter()
+                .map(|(s, e)| format!("{}:{}-{}", chrom, s, e))
+                .collect(),
+            None => vec![format!("{}:{}-{}", chrom, start_i32, end_i32)],
+        };
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<VariantDetails>>(16);
+
+        tokio::task::spawn_blocking(move || {
+            debug!(
+                "Streaming variant details for {} intervals (no projection)",
+                interval_strs.len()
+            );
+
+            let intervals = match IntervalList::from_strings(&interval_strs) {
+                Ok(i) => i,
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e.into()));
+                    return;
+                }
+            };
+
+            let iter = match variants_engine.query_iter_with_intervals(
+                &[],
+                Some(Arc::new(intervals)),
+            ) {
+                Ok(i) => i,
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e.into()));
+                    return;
+                }
+            };
+
+            for row_result in iter {
+                if let Some(detail) = row_result.ok().and_then(|r| extract_variant_details(&r)) {
+                    if tx.blocking_send(Ok(detail)).is_err() {
+                        debug!("Detail stream receiver dropped, stopping iteration");
                         return;
                     }
                 }

@@ -8,8 +8,8 @@ mod worker;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::{Json, Response},
+    http::{header::HeaderName, StatusCode},
+    response::{IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -233,7 +233,8 @@ async fn main() -> anyhow::Result<()> {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([X_CACHE.clone()]);
 
     // Build router
     let app = Router::new()
@@ -242,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/gene/:gene_id/variants", get(get_gene_variants))
         .route("/api/gene/:gene_id/variants/stream", get(stream_gene_variants))
         .route("/api/region/:region_id", get(get_region_variants))
+        .route("/api/variants/stream", get(stream_region_variants))
         .route("/api/search", get(search_genes))
         .route("/api/variant/:variant_id", get(get_variant_detail))
         .route("/api/schema/:table", get(get_table_schema))
@@ -290,14 +292,20 @@ async fn health_check() -> Json<Value> {
     }))
 }
 
+/// Header name for cache status
+static X_CACHE: HeaderName = HeaderName::from_static("x-cache");
+
 async fn get_gene(
     State(state): State<AppState>,
     Path(gene_id): Path<String>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     // Check cache
     let cache_key = format!("gene:{}", gene_id);
     if let Some(cached) = state.cache.get(&cache_key).await {
-        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+        return Ok((
+            [(X_CACHE.clone(), "moka-hit")],
+            Json(serde_json::from_slice::<Value>(&cached).unwrap()),
+        ));
     }
 
     let result = if gene_id.starts_with("ENSG") {
@@ -312,7 +320,7 @@ async fn get_gene(
             // Cache the result
             let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
             state.cache.insert(cache_key, bytes).await;
-            Ok(Json(json_val))
+            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
         }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
@@ -332,11 +340,14 @@ async fn get_gene_variants(
     State(state): State<AppState>,
     Path(gene_id): Path<String>,
     Query(params): Query<VariantQuery>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     // Check cache
     let cache_key = format!("gene_variants:{}:fb={}", gene_id, params.force_fallback);
     if let Some(cached) = state.cache.get(&cache_key).await {
-        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+        return Ok((
+            [(X_CACHE.clone(), "moka-hit")],
+            Json(serde_json::from_slice::<Value>(&cached).unwrap()),
+        ));
     }
 
     // Look up gene first
@@ -385,7 +396,7 @@ async fn get_gene_variants(
             let json_val = serde_json::to_value(&response).unwrap();
             let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
             state.cache.insert(cache_key, bytes).await;
-            Ok(Json(json_val))
+            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
         }
         Err(e) => {
             tracing::error!("Error fetching variants for {}: {}", gene_id, e);
@@ -514,6 +525,15 @@ async fn stream_gene_variants(
     let cache = state.cache.clone();
     let gene_for_cache = gene.clone();
     let cache_key_owned = cache_key;
+    let backend = Arc::clone(&state.backend);
+    let prefetch_cache = state.cache.clone();
+    let prefetch_chrom = chrom.clone();
+    let prefetch_gene_start = gene.start;
+    let prefetch_gene_stop = gene.stop;
+    let prefetch_regions = exon_regions.clone();
+
+    /// Maximum variant count for which background prefetch is triggered.
+    const MAX_PREFETCH_VARIANTS: usize = 10_000;
 
     let ndjson_stream = async_stream::stream! {
         yield Ok::<Bytes, std::io::Error>(Bytes::from(gene_line));
@@ -535,10 +555,24 @@ async fn stream_gene_variants(
             }
         }
 
+        let variant_count = all_variants.len();
+        let prefetch_eligible = variant_count <= MAX_PREFETCH_VARIANTS && variant_count > 0;
+
+        // Emit a summary line with prefetch metadata
+        let summary = serde_json::json!({
+            "summary": {
+                "total": variant_count,
+                "prefetch_eligible": prefetch_eligible,
+            }
+        });
+        let mut summary_line = serde_json::to_string(&summary).unwrap();
+        summary_line.push('\n');
+        yield Ok(Bytes::from(summary_line));
+
         // Populate cache after stream completes so refreshes are instant
         let response = api::GeneVariantsResponse {
             gene: gene_for_cache,
-            total: all_variants.len(),
+            total: variant_count,
             variants: all_variants,
         };
         if let Ok(json_val) = serde_json::to_value(&response) {
@@ -546,10 +580,231 @@ async fn stream_gene_variants(
                 cache.insert(cache_key_owned, Bytes::from(bytes)).await;
             }
         }
+
+        // Background prefetch: re-scan without projection to populate variant detail cache
+        if variant_count <= MAX_PREFETCH_VARIANTS && variant_count > 0 {
+            tokio::spawn(async move {
+                tracing::info!(
+                    "Background prefetch: decoding full details for {} variants",
+                    variant_count
+                );
+                match backend
+                    .stream_variant_details(
+                        &prefetch_chrom,
+                        prefetch_gene_start,
+                        prefetch_gene_stop,
+                        prefetch_regions.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(detail_stream) => {
+                        let mut detail_stream = std::pin::pin!(detail_stream);
+                        let mut cached = 0usize;
+                        while let Some(result) = detail_stream.next().await {
+                            match result {
+                                Ok(detail) => {
+                                    if let Some(ref vid) = detail.variant_id {
+                                        let key = format!("variant:{}:fb=false", vid);
+                                        if let Ok(bytes) = serde_json::to_vec(&detail) {
+                                            prefetch_cache.insert(key, Bytes::from(bytes)).await;
+                                            cached += 1;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Background prefetch error: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        tracing::info!("Background prefetch complete: cached {} variant details", cached);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Background prefetch failed to start: {}", e);
+                    }
+                }
+            });
+        }
     };
 
     Ok(Response::builder()
         .header("Content-Type", "application/x-ndjson")
+        .header("x-cache", "miss")
+        .body(Body::from_stream(ndjson_stream))
+        .unwrap())
+}
+
+#[derive(Debug, Deserialize)]
+struct RegionStreamQuery {
+    /// Chromosome, e.g. "chr1"
+    chrom: String,
+    /// Comma-separated intervals as "start-stop,start-stop"
+    intervals: String,
+}
+
+async fn stream_region_variants(
+    State(state): State<AppState>,
+    Query(params): Query<RegionStreamQuery>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    // Parse intervals
+    let intervals: Vec<(i64, i64)> = params
+        .intervals
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let parts: Vec<&str> = s.split('-').collect();
+            if parts.len() != 2 {
+                return Err(());
+            }
+            let start: i64 = parts[0].parse().map_err(|_| ())?;
+            let stop: i64 = parts[1].parse().map_err(|_| ())?;
+            Ok((start, stop))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "Invalid intervals format",
+                    "expected": "start-stop,start-stop",
+                    "received": params.intervals
+                })),
+            )
+        })?;
+
+    if intervals.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "No intervals provided" })),
+        ));
+    }
+
+    // Normalize chromosome
+    let chrom = if params.chrom.starts_with("chr") {
+        params.chrom.clone()
+    } else {
+        format!("chr{}", params.chrom)
+    };
+
+    // Compute bounding region from intervals
+    let bounding_start = intervals.iter().map(|(s, _)| *s).min().unwrap();
+    let bounding_end = intervals.iter().map(|(_, e)| *e).max().unwrap();
+
+    let variant_stream = match state
+        .backend
+        .stream_variants(&chrom, bounding_start, bounding_end, Some(&intervals))
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Error starting region variant stream: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            ));
+        }
+    };
+
+    // Build NDJSON stream: first line is metadata, then one variant per line
+    let metadata = json!({
+        "chrom": chrom,
+        "intervals": intervals.len(),
+        "bounding_start": bounding_start,
+        "bounding_end": bounding_end,
+    });
+    let metadata_line = serde_json::to_string(&metadata).unwrap() + "\n";
+
+    let prefetch_cache = state.cache.clone();
+    let backend = Arc::clone(&state.backend);
+    let prefetch_chrom = chrom.clone();
+    let prefetch_start = bounding_start;
+    let prefetch_end = bounding_end;
+    let prefetch_intervals = intervals.clone();
+    const MAX_PREFETCH_VARIANTS: usize = 10_000;
+
+    let ndjson_stream = async_stream::stream! {
+        yield Ok::<Bytes, std::io::Error>(Bytes::from(metadata_line));
+
+        let mut all_variants: Vec<crate::models::api::Variant> = Vec::new();
+        let mut variant_stream = std::pin::pin!(variant_stream);
+        while let Some(result) = variant_stream.next().await {
+            match result {
+                Ok(variant) => {
+                    let mut line = serde_json::to_string(&json!({ "variant": variant })).unwrap();
+                    line.push('\n');
+                    all_variants.push(variant);
+                    yield Ok(Bytes::from(line));
+                }
+                Err(e) => {
+                    tracing::error!("Error streaming region variant: {}", e);
+                    break;
+                }
+            }
+        }
+
+        let variant_count = all_variants.len();
+        let prefetch_eligible = variant_count <= MAX_PREFETCH_VARIANTS && variant_count > 0;
+
+        // Emit a summary line with prefetch metadata
+        let summary = serde_json::json!({
+            "summary": {
+                "total": variant_count,
+                "prefetch_eligible": prefetch_eligible,
+            }
+        });
+        let mut summary_line = serde_json::to_string(&summary).unwrap();
+        summary_line.push('\n');
+        yield Ok(Bytes::from(summary_line));
+
+        // Background prefetch: re-scan without projection to populate variant detail cache
+        if prefetch_eligible {
+            tokio::spawn(async move {
+                tracing::info!(
+                    "Region background prefetch: decoding full details for {} variants",
+                    variant_count
+                );
+                match backend
+                    .stream_variant_details(
+                        &prefetch_chrom,
+                        prefetch_start,
+                        prefetch_end,
+                        Some(&prefetch_intervals),
+                    )
+                    .await
+                {
+                    Ok(detail_stream) => {
+                        let mut detail_stream = std::pin::pin!(detail_stream);
+                        let mut cached = 0usize;
+                        while let Some(result) = detail_stream.next().await {
+                            match result {
+                                Ok(detail) => {
+                                    if let Some(ref vid) = detail.variant_id {
+                                        let key = format!("variant:{}:fb=false", vid);
+                                        if let Ok(bytes) = serde_json::to_vec(&detail) {
+                                            prefetch_cache.insert(key, Bytes::from(bytes)).await;
+                                            cached += 1;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Region background prefetch error: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        tracing::info!("Region background prefetch complete: cached {} variant details", cached);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Region background prefetch failed to start: {}", e);
+                    }
+                }
+            });
+        }
+    };
+
+    Ok(Response::builder()
+        .header("Content-Type", "application/x-ndjson")
+        .header("x-cache", "miss")
         .body(Body::from_stream(ndjson_stream))
         .unwrap())
 }
@@ -581,7 +836,7 @@ async fn get_region_variants(
     State(state): State<AppState>,
     Path(region_id): Path<String>,
     Query(params): Query<VariantQuery>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let (chrom, start, end) = match parse_region(&region_id) {
         Some(r) => r,
         None => {
@@ -599,7 +854,10 @@ async fn get_region_variants(
     // Check cache
     let cache_key = format!("region:{}:{}-{}:fb={}", chrom, start, end, params.force_fallback);
     if let Some(cached) = state.cache.get(&cache_key).await {
-        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+        return Ok((
+            [(X_CACHE.clone(), "moka-hit")],
+            Json(serde_json::from_slice::<Value>(&cached).unwrap()),
+        ));
     }
 
     match state
@@ -620,7 +878,7 @@ async fn get_region_variants(
             let json_val = serde_json::to_value(&response).unwrap();
             let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
             state.cache.insert(cache_key, bytes).await;
-            Ok(Json(json_val))
+            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
         }
         Err(e) => {
             tracing::error!("Error fetching region {}: {}", region_id, e);
@@ -659,11 +917,14 @@ async fn get_variant_detail(
     State(state): State<AppState>,
     Path(variant_id): Path<String>,
     Query(params): Query<VariantQuery>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     // Check cache
     let cache_key = format!("variant:{}:fb={}", variant_id, params.force_fallback);
     if let Some(cached) = state.cache.get(&cache_key).await {
-        return Ok(Json(serde_json::from_slice(&cached).unwrap()));
+        return Ok((
+            [(X_CACHE.clone(), "moka-hit")],
+            Json(serde_json::from_slice::<Value>(&cached).unwrap()),
+        ));
     }
 
     match state
@@ -675,7 +936,7 @@ async fn get_variant_detail(
             let json_val = serde_json::to_value(&variant).unwrap();
             let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
             state.cache.insert(cache_key, bytes).await;
-            Ok(Json(json_val))
+            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
         }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,

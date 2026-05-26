@@ -58,4 +58,18 @@ pub trait VariantBackend: Send + Sync {
         let variants = self.get_variants(chrom, start, end, false).await?;
         Ok(stream::iter(variants.into_iter().map(Ok)).boxed())
     }
+
+    /// Stream full variant details (no projection) for a genomic region.
+    /// Used by background prefetch to populate the variant detail cache.
+    /// Default implementation returns an empty stream.
+    async fn stream_variant_details(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+        regions: Option<&[(i64, i64)]>,
+    ) -> Result<BoxStream<'static, Result<VariantDetails>>> {
+        let _ = (chrom, start, end, regions);
+        Ok(stream::empty().boxed())
+    }
 }

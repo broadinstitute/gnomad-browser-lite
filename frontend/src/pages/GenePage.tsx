@@ -1,8 +1,9 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import styled from 'styled-components';
-import { api, streamGeneVariants, type StreamSource } from '../api/client';
+import { api } from '../api/client';
 import type { Gene, Variant, Exon } from '../api/types';
+import type { Region } from '../utils/coordinates';
 import { getGeneSymbol } from '../api/types';
 import { VariantsTable } from '../components/VariantsTable';
 import { GenomeBrowser } from '../components/GenomeBrowser';
@@ -13,6 +14,8 @@ import {
   filterVariants,
   type VariantFilter,
 } from '../components/VariantFilterControls';
+import { useVariantCache } from '../hooks/useVariantCache';
+import { mergeIntervals } from '../utils/intervals';
 
 const Container = styled.div`
   max-width: 1400px;
@@ -122,15 +125,6 @@ const ProgressBarContainer = styled.span`
   vertical-align: middle;
 `;
 
-const ProgressBarFill = styled.span<{ $percent: number }>`
-  display: block;
-  height: 100%;
-  width: ${p => p.$percent}%;
-  background: #1976d2;
-  border-radius: 3px;
-  transition: width 0.2s ease-out;
-`;
-
 const ProgressBarIndeterminate = styled.span`
   display: block;
   height: 100%;
@@ -154,22 +148,17 @@ export function GenePage() {
   const { geneId } = useParams<{ geneId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [gene, setGene] = useState<Gene | null>(null);
-  const [variants, setVariants] = useState<Variant[]>([]);
   const [exons, setExons] = useState<Exon[]>([]);
-  const [streamingStatus, setStreamingStatus] = useState<'idle' | 'loading' | 'streaming' | 'complete'>('idle');
+  const [geneLoading, setGeneLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<VariantFilter>(DEFAULT_VARIANT_FILTER);
-  const [showIntrons, setShowIntrons] = useState(false); // Default: hide introns
+  const [showIntrons, setShowIntrons] = useState(false);
   const [includeUTRs, setIncludeUTRs] = useState(false);
   const [includeNonCodingTranscripts, setIncludeNonCodingTranscripts] = useState(false);
   const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
-  const [totalEstimate, setTotalEstimate] = useState<number | null>(null);
-  const [streamSource, setStreamSource] = useState<StreamSource | null>(null);
 
-  // Ref-based accumulation to avoid O(n²) copies
-  const variantsRef = useRef<Variant[]>([]);
-  const streamDoneRef = useRef(false);
   const prevGeneIdRef = useRef<string | undefined>(undefined);
+  const cache = useVariantCache();
 
   // Parse zoom region from URL params
   const zoomRegion = useMemo(() => {
@@ -185,10 +174,8 @@ export function GenePage() {
     return null;
   }, [searchParams]);
 
-  // Determine if we're zoomed in
   const isZoomed = zoomRegion !== null;
 
-  // Handle region change from GenomeBrowser drag selection
   const handleRegionChange = useCallback((region: { start: number; stop: number }) => {
     setSearchParams({
       start: region.start.toString(),
@@ -196,12 +183,10 @@ export function GenePage() {
     });
   }, [setSearchParams]);
 
-  // Handle reset zoom
   const handleResetZoom = useCallback(() => {
     setSearchParams({});
   }, [setSearchParams]);
 
-  // Handle variant selection toggle
   const handleToggleVariantSelection = useCallback((variantId: string) => {
     setSelectedVariantIds(prev => {
       const next = new Set(prev);
@@ -214,16 +199,93 @@ export function GenePage() {
     });
   }, []);
 
-  // Clear all selections
   const handleClearSelection = useCallback(() => {
     setSelectedVariantIds(new Set());
   }, []);
 
-  // Filter variants based on filter state, exon visibility, and zoom region
+  // Fetch gene metadata when geneId changes
+  useEffect(() => {
+    if (!geneId) return;
+
+    const isGeneChange = geneId !== prevGeneIdRef.current;
+    prevGeneIdRef.current = geneId;
+
+    if (isGeneChange) {
+      setGene(null);
+      setExons([]);
+      setError(null);
+      cache.reset();
+    }
+
+    setGeneLoading(true);
+
+    api.getGene(geneId)
+      .then((geneData) => {
+        setGene(geneData);
+        if (geneData.exons && geneData.exons.length > 0) {
+          setExons(geneData.exons);
+        } else {
+          const geneSymbol = geneData.gene_symbol || geneData.gencode_symbol || geneId;
+          api.fetchExonsFromGnomAD(geneSymbol, geneData.canonical_transcript_id)
+            .then(setExons)
+            .catch(() => {});
+        }
+      })
+      .catch((err) => {
+        setError(err.message);
+      })
+      .finally(() => {
+        setGeneLoading(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geneId]);
+
+  // Compute desired intervals from toggles and feed to cache
+  useEffect(() => {
+    if (!gene || exons.length === 0) return;
+
+    const desiredIntervals: Region[] = [];
+
+    if (showIntrons) {
+      // Full gene region
+      desiredIntervals.push({ start: gene.start, stop: gene.stop });
+    } else {
+      // Collect active exon types
+      const activeTypes = new Set<string>(['CDS']);
+      if (includeUTRs) activeTypes.add('UTR');
+      if (includeNonCodingTranscripts) activeTypes.add('exon');
+
+      const shoulder = 50;
+      for (const exon of exons) {
+        if (activeTypes.has(exon.feature_type)) {
+          desiredIntervals.push({
+            start: Math.max(0, exon.start - shoulder),
+            stop: exon.stop + shoulder,
+          });
+        }
+      }
+    }
+
+    // Include zoom region if outside current coverage
+    if (zoomRegion) {
+      desiredIntervals.push({ start: zoomRegion.start, stop: zoomRegion.stop });
+    }
+
+    const merged = mergeIntervals(desiredIntervals);
+    if (merged.length > 0) {
+      cache.ensureIntervalsCovered(gene.chrom, merged);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gene, exons, showIntrons, includeUTRs, includeNonCodingTranscripts, zoomRegion]);
+
+  // Derive display-filtered variants from cache
+  const variants = cache.variants;
+  const streamingStatus: 'idle' | 'loading' | 'streaming' | 'complete' =
+    geneLoading ? 'loading' : cache.isLoading ? 'streaming' : variants.length > 0 ? 'complete' : 'idle';
+
   const filteredVariants = useMemo(() => {
     let result = filterVariants(variants, filter);
 
-    // Filter by zoom region if zoomed
     if (zoomRegion) {
       result = result.filter(v => {
         const pos = v.pos || v.locus?.position || 0;
@@ -231,7 +293,7 @@ export function GenePage() {
       });
     }
 
-    // Also filter by exon regions if introns are hidden
+    // Filter by exon regions if introns are hidden (display filter only)
     if (!showIntrons && exons.length > 0) {
       result = result.filter(v => {
         const pos = v.pos || v.locus?.position || 0;
@@ -241,90 +303,6 @@ export function GenePage() {
 
     return result;
   }, [variants, filter, showIntrons, exons, zoomRegion]);
-
-  useEffect(() => {
-    if (!geneId) return;
-
-    const isGeneChange = geneId !== prevGeneIdRef.current;
-    prevGeneIdRef.current = geneId;
-
-    const abortController = new AbortController();
-    variantsRef.current = [];
-    streamDoneRef.current = false;
-    if (isGeneChange) {
-      setGene(null);
-      setExons([]);
-    }
-    setVariants([]);
-    setError(null);
-    setTotalEstimate(null);
-    setStreamSource(null);
-    setStreamingStatus(isGeneChange ? 'loading' : 'streaming');
-
-    // Always fetch the full gene region — display toggles are client-side only
-    const includeFeatureTypes = ['CDS', 'UTR', 'exon'];
-    const mode = 'full' as const;
-
-    // 200ms interval to flush accumulated variants to React state
-    const flushInterval = setInterval(() => {
-      if (variantsRef.current.length > 0) {
-        setVariants([...variantsRef.current]);
-      }
-    }, 200);
-
-    streamGeneVariants(
-      geneId,
-      {
-        onMetadata: (geneData, total, source) => {
-          setGene(geneData);
-          if (total != null) setTotalEstimate(total);
-          if (source) setStreamSource(source);
-          setStreamingStatus('streaming');
-
-          // Use exons from gene data (already in the Hail table) — no external API call needed
-          if (geneData.exons && geneData.exons.length > 0) {
-            setExons(geneData.exons);
-          } else {
-            // Fallback to external gnomAD API if local exons not available
-            const geneSymbol = geneData.gene_symbol || geneData.gencode_symbol || geneId;
-            api.fetchExonsFromGnomAD(geneSymbol, geneData.canonical_transcript_id)
-              .then(setExons)
-              .catch(() => {});
-          }
-        },
-        onVariants: (batch) => {
-          variantsRef.current.push(...batch);
-        },
-        onComplete: () => {
-          streamDoneRef.current = true;
-          // Final flush
-          setVariants([...variantsRef.current]);
-          setStreamingStatus('complete');
-          clearInterval(flushInterval);
-        },
-        onError: (err) => {
-          streamDoneRef.current = true;
-          // Flush whatever we have
-          if (variantsRef.current.length > 0) {
-            setVariants([...variantsRef.current]);
-          }
-          setError(err.message);
-          setStreamingStatus('complete');
-          clearInterval(flushInterval);
-        },
-      },
-      abortController.signal,
-      { mode, includeFeatureTypes },
-    );
-
-    return () => {
-      abortController.abort();
-      clearInterval(flushInterval);
-    };
-  // Only re-fetch when the gene changes. UTR/intron/non-coding toggles are
-  // client-side display filters — the full variant set is already loaded.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [geneId]);
 
   if (streamingStatus === 'loading' || (streamingStatus === 'idle' && !gene)) {
     return (
@@ -457,29 +435,13 @@ export function GenePage() {
           <span style={{ fontWeight: 'normal', fontSize: '0.9rem', color: '#666' }}>
             {' '}of {variants.length.toLocaleString()}
           </span>
-        )}
-        {streamingStatus === 'streaming' && totalEstimate != null && (
-          <span style={{ fontWeight: 'normal', fontSize: '0.9rem', color: '#666' }}>
-            {' '}/ {totalEstimate.toLocaleString()}
-          </span>
         )})
         {streamingStatus === 'streaming' && (
           <StreamingBadge>
             <ProgressBarContainer>
-              {totalEstimate != null ? (
-                <ProgressBarFill $percent={Math.min(100, (variants.length / totalEstimate) * 100)} />
-              ) : (
-                <ProgressBarIndeterminate />
-              )}
+              <ProgressBarIndeterminate />
             </ProgressBarContainer>
-            {totalEstimate != null
-              ? `${Math.round((variants.length / totalEstimate) * 100)}%`
-              : 'Loading...'}
-            {streamSource && (
-              <span style={{ color: '#999', fontSize: '0.75rem' }}>
-                from {streamSource.path.split('/').pop()?.replace('.ht', '')} ({streamSource.total_partitions} partitions)
-              </span>
-            )}
+            Loading...
           </StreamingBadge>
         )}
       </SectionTitle>

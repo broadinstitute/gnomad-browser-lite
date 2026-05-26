@@ -235,8 +235,8 @@ const createColumns = (
     grow: 0,
     isSortable: true,
     render: (row) => (
-      <Cell title={row.hgvsc || row.hgvsp || ''}>
-        {row.hgvsc || row.hgvsp || ''}
+      <Cell title={row.hgvsp || row.hgvsc || ''}>
+        {row.hgvsp || row.hgvsc || ''}
       </Cell>
     ),
   },
@@ -354,7 +354,7 @@ export function VariantsTable({
       const id = getVariantId(v).toLowerCase();
       const consequence = (v.consequence || '').toLowerCase();
       const rsid = (getRsid(v) || '').toLowerCase();
-      const hgvs = (v.hgvsc || v.hgvsp || '').toLowerCase();
+      const hgvs = (v.hgvsp || v.hgvsc || '').toLowerCase();
       return (
         id.includes(lowerFilter) ||
         consequence.includes(lowerFilter) ||
@@ -376,7 +376,7 @@ export function VariantsTable({
         case 'consequence':
           return compareValues(a.consequence, b.consequence, ascending);
         case 'hgvs':
-          return compareValues(a.hgvsc || a.hgvsp, b.hgvsc || b.hgvsp, ascending);
+          return compareValues(a.hgvsp || a.hgvsc, b.hgvsp || b.hgvsc, ascending);
         case 'ac':
           return compareValues(a.ac, b.ac, ascending);
         case 'an':

@@ -371,6 +371,14 @@ fn dual_contig_intervals(chrom: &str, intervals: &[(i32, i32)]) -> Vec<String> {
     result
 }
 
+/// Strip transcript prefix from HGVS notation: "ENST00000302118.5:c.-180T>G" → "c.-180T>G"
+fn strip_hgvs_prefix(hgvs: Option<String>) -> Option<String> {
+    hgvs.map(|s| match s.rfind(':') {
+        Some(i) => s[i + 1..].to_string(),
+        None => s,
+    })
+}
+
 /// Synthesize a variant_id from locus+alleles (for VCF sources that lack variant_id).
 /// Strips `chr` prefix to match gnomAD-style IDs: "1-55039447-G-A".
 fn synthesize_variant_id(contig: &str, pos: i64, alleles: &[String]) -> Option<String> {
@@ -512,8 +520,8 @@ fn extract_canonical_consequence(
         if let Some(entry) = entry {
             return (
                 get_field(entry, "consequence").and_then(as_string),
-                get_field(entry, "hgvsc").and_then(as_string),
-                get_field(entry, "hgvsp").and_then(as_string),
+                strip_hgvs_prefix(get_field(entry, "hgvsc").and_then(as_string)),
+                strip_hgvs_prefix(get_field(entry, "hgvsp").and_then(as_string)),
                 get_field(entry, "gene_id").and_then(as_string),
                 get_field(entry, "gene_symbol").and_then(as_string),
                 get_field(entry, "transcript_id").and_then(as_string),

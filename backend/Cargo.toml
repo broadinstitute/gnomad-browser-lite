@@ -27,6 +27,9 @@ toml = "0.8"
 pulldown-cmark = "0.12"
 clickhouse = { version = "0.12", features = ["time"] }
 genohype-pool = { path = "../../genohype/pool" }
+genohype-mcp = { path = "../../genohype/mcp" }
+rmcp = { version = "1.7", features = ["server", "transport-io"] }
+schemars = "1"
 futures = "0.3"
 tokio-stream = "0.1"
 async-stream = "0.3"

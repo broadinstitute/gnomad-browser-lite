@@ -4,6 +4,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser, Debug)]
 #[command(name = "gbl", version, about)]
 pub struct Cli {
+    /// Path to gbl.toml configuration file (global, used by serve and mcp commands)
+    #[arg(short, long, global = true)]
+    pub config: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -42,10 +46,6 @@ pub enum InitStrategy {
 pub enum Commands {
     /// Start the REST API server
     Serve {
-        /// Path to gbl.toml configuration file
-        #[arg(short, long)]
-        config: Option<String>,
-
         /// Port to listen on (overrides config and PORT env var)
         #[arg(short, long)]
         port: Option<u16>,
@@ -155,6 +155,17 @@ pub enum Commands {
     /// Manage ClickHouse infrastructure on GCP
     #[command(subcommand)]
     Clickhouse(ClickhouseCommands),
+
+    /// Run the MCP (Model Context Protocol) server
+    #[command(subcommand)]
+    Mcp(McpCommands),
+}
+
+/// MCP server transport subcommands.
+#[derive(Subcommand, Debug)]
+pub enum McpCommands {
+    /// Run MCP server over stdin/stdout (for CopilotKit bridge or Claude Desktop)
+    Stdio,
 }
 
 /// Pool management subcommands using genohype-pool native library.

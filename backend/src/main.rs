@@ -2,6 +2,7 @@ mod backend;
 mod cli;
 mod commands;
 mod config;
+mod mcp;
 mod models;
 mod worker;
 
@@ -28,9 +29,12 @@ use crate::backend::duckdb::DuckDbBackend;
 use crate::backend::hail::HailBackend;
 use crate::backend::tiered::TieredBackend;
 use crate::backend::VariantBackend;
-use crate::cli::{Cli, Commands};
+use crate::cli::{Cli, Commands, McpCommands};
 use crate::config::{BackendConfig, BrandingConfig, Config};
+use crate::mcp::provider::GnomadMcpProvider;
+use crate::mcp::server::GnomadMcpServer;
 use crate::models::api;
+use rmcp::ServiceExt;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -187,17 +191,20 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Clickhouse(ch_cmd)) => {
             return commands::infra::run(ch_cmd).map_err(Into::into);
         }
+        Some(Commands::Mcp(mcp_cmd)) => {
+            return run_mcp(&cli, mcp_cmd).await;
+        }
         _ => {}
     }
 
     // Resolve serve command (default if no subcommand given)
-    let (config_path, port_override) = match &cli.command {
-        Some(Commands::Serve { config, port }) => (config.as_deref(), *port),
-        None => (None, None),
+    let port_override = match &cli.command {
+        Some(Commands::Serve { port }) => *port,
+        None => None,
         _ => unreachable!("non-server commands handled above"),
     };
 
-    let config = Config::load(config_path)?;
+    let config = Config::load(cli.config.as_deref())?;
     tracing::info!("Backend config: {:?}", config.backend);
 
     // Initialize moka cache: 500MB capacity, 24h TTL
@@ -276,6 +283,29 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+// ==================== MCP server ====================
+
+async fn run_mcp(cli: &Cli, mcp_cmd: &McpCommands) -> anyhow::Result<()> {
+    // MCP stdio: suppress all tracing output (it would corrupt the JSON-RPC stream)
+    // Tracing is already initialized above, but we redirect to stderr for MCP mode
+    let config = Config::load(cli.config.as_deref())?;
+    let (backend, _source_info) = build_backend(&config.backend)?;
+    let backend: Arc<dyn VariantBackend> = Arc::from(backend);
+
+    let provider = Arc::new(GnomadMcpProvider::new(backend));
+    let server = GnomadMcpServer::new(provider);
+
+    match mcp_cmd {
+        McpCommands::Stdio => {
+            let transport = rmcp::transport::io::stdio();
+            let service = server.serve(transport).await?;
+            service.waiting().await?;
+        }
+    }
 
     Ok(())
 }

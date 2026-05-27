@@ -2,9 +2,10 @@
   "name": "gnomad-browser-lite",
   "private": true,
   "scripts": {
-    "start": "concurrently -n backend,frontend -c blue,green \"./scripts/start-backend.sh\" \"./scripts/start-frontend.sh\"",
+    "start": "concurrently -n backend,bridge,frontend -c blue,magenta,green \"./scripts/start-backend.sh\" \"./scripts/start-bridge.sh\" \"./scripts/start-frontend.sh\"",
     "stop": "./scripts/stop.sh",
     "start:backend": "./scripts/start-backend.sh",
+    "start:bridge": "./scripts/start-bridge.sh",
     "start:frontend": "./scripts/start-frontend.sh",
     "setup": "./scripts/setup.sh"
   },

@@ -22,5 +22,12 @@ export default defineConfig({
     // Use VITE_PORT env var or default to 5173
     port: parseInt(process.env.VITE_PORT || '5173'),
     strictPort: true,
+    proxy: {
+      // Proxy CopilotKit requests to the bridge server
+      '/api/copilotkit': {
+        target: process.env.BRIDGE_URL || 'http://localhost:4111',
+        changeOrigin: true,
+      },
+    },
   },
 })

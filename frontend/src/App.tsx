@@ -1,11 +1,15 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
 import styled, { createGlobalStyle } from 'styled-components';
+import { AssistantProvider, AssistantPanel, ChatHistorySidebar, useAssistantContext } from '@genohype/assistant-ui';
+import { useGnomadVariantActions } from './assistant/hooks/useGnomadVariantActions';
+import { useCallback, useRef, useEffect } from 'react';
 import { HomePage } from './pages/HomePage';
 import { GenePage } from './pages/GenePage';
 import { RegionPage } from './pages/RegionPage';
 import { VariantPage } from './pages/VariantPage';
 import { CacheDevTool } from './components/CacheDevTool';
 import { BrandingProvider, useBranding } from './contexts/BrandingContext';
+import { usePageContext } from './hooks/usePageContext';
 
 const GlobalStyle = createGlobalStyle`
   * {
@@ -89,12 +93,76 @@ const NavExternalLink = styled.a`
   }
 `;
 
+function ToolActionRegistrar() {
+  useGnomadVariantActions();
+  return null;
+}
+
+function FullscreenSidebar() {
+  const { runtimeUrl, getAuthToken, threadId, setThreadId, newChat, threadVersion } = useAssistantContext();
+  const refreshRef = useRef<(() => void) | null>(null);
+
+  const fetchThreads = useCallback(async () => {
+    const headers: Record<string, string> = {};
+    if (getAuthToken) {
+      try { headers.Authorization = `Bearer ${await getAuthToken()}` } catch { /* noop */ }
+    }
+    const res = await fetch(`${runtimeUrl}/threads`, { headers });
+    if (!res.ok) return [];
+    return res.json();
+  }, [runtimeUrl, getAuthToken]);
+
+  const deleteThread = useCallback(async (id: string) => {
+    const headers: Record<string, string> = {};
+    if (getAuthToken) {
+      try { headers.Authorization = `Bearer ${await getAuthToken()}` } catch { /* noop */ }
+    }
+    await fetch(`${runtimeUrl}/threads/${id}`, { method: 'DELETE', headers });
+  }, [runtimeUrl, getAuthToken]);
+
+  // Re-fetch sidebar when threadVersion changes (new chat created, message sent, etc.)
+  useEffect(() => {
+    // Small delay to let the POST /threads complete
+    const timer = setTimeout(() => refreshRef.current?.(), 200);
+    return () => clearTimeout(timer);
+  }, [threadVersion]);
+
+  return (
+    <ChatHistorySidebar
+      currentThreadId={threadId}
+      onNewChat={newChat}
+      onRefreshRef={(fn) => { refreshRef.current = fn; }}
+      onSelectThread={setThreadId}
+      fetchThreads={fetchThreads}
+      deleteThread={deleteThread}
+    />
+  );
+}
+
 function AppContent() {
   const branding = useBranding();
+  const navigate = useNavigate();
+  const { pageContext, suggestions } = usePageContext();
   const displayName = branding.full_title || branding.short_name || branding.name;
 
   return (
     <>
+    <ToolActionRegistrar />
+    <AssistantPanel
+      defaultMode="closed"
+      title={`${branding.short_name || 'Genomic'} Assistant`}
+      toggleLabel={`Ask ${branding.short_name || 'Genomic'} Assistant`}
+      suggestions={suggestions}
+      pageContext={pageContext}
+      onNavigate={(url: string) => navigate(url)}
+      allowAdmin={true}
+      modelOptions={[
+        { value: 'gemini-3.1-flash', label: 'Gemini 3.1 Flash' },
+        { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+        { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+        { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      ]}
+    >
       <GlobalStyle />
       <Nav>
         <NavContent>
@@ -127,6 +195,7 @@ function AppContent() {
         </Routes>
       </main>
       {import.meta.env.DEV && <CacheDevTool />}
+    </AssistantPanel>
     </>
   );
 }
@@ -135,7 +204,9 @@ function App() {
   return (
     <BrowserRouter>
       <BrandingProvider>
-        <AppContent />
+        <AssistantProvider runtimeUrl="/api/copilotkit" defaultMode="closed" persistentSidebar={<FullscreenSidebar />}>
+          <AppContent />
+        </AssistantProvider>
       </BrandingProvider>
     </BrowserRouter>
   );

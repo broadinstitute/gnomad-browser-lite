@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import styled from 'styled-components';
 import { api } from '../api/client';
-import type { Gene, Variant, Exon } from '../api/types';
+import type { Gene, Variant, Exon, GeneConstraint } from '../api/types';
 import type { Region } from '../utils/coordinates';
 import { getGeneSymbol } from '../api/types';
 import { VariantsTable } from '../components/VariantsTable';
@@ -17,6 +17,7 @@ import {
 import { useVariantCache } from '../hooks/useVariantCache';
 import { mergeIntervals } from '../utils/intervals';
 import { useBranding } from '../contexts/BrandingContext';
+import { ConstraintTable } from '../components/ConstraintTable';
 
 const Container = styled.div`
   max-width: 1400px;
@@ -41,10 +42,19 @@ const GeneDescription = styled.span`
   margin-left: 0.5rem;
 `;
 
-const GeneInfo = styled.div`
+const GeneInfoRow = styled.div`
+  display: flex;
+  gap: 2rem;
   margin-bottom: 1.5rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+`;
+
+const GeneInfo = styled.div`
   font-size: 14px;
   line-height: 1.8;
+  flex-shrink: 0;
 `;
 
 const InfoRow = styled.div`
@@ -351,65 +361,71 @@ export function GenePage() {
         <GeneTitle>{geneSymbol}</GeneTitle>
       </Header>
 
-      <GeneInfo>
-        <InfoRow>
-          <InfoLabel>Ensembl gene ID</InfoLabel>{' '}
-          <InfoLink
-            href={`https://ensembl.org/Homo_sapiens/Gene/Summary?g=${gene.gene_id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {gene.gene_id}
-          </InfoLink>
-        </InfoRow>
-        {gene.canonical_transcript_id && (
+      <GeneInfoRow>
+        <GeneInfo>
           <InfoRow>
-            <InfoLabel>Canonical transcript</InfoLabel>{' '}
+            <InfoLabel>Ensembl gene ID</InfoLabel>{' '}
             <InfoLink
-              href={`https://ensembl.org/Homo_sapiens/Transcript/Summary?t=${gene.canonical_transcript_id}`}
+              href={`https://ensembl.org/Homo_sapiens/Gene/Summary?g=${gene.gene_id}`}
               target="_blank"
               rel="noopener noreferrer"
             >
-              {gene.canonical_transcript_id}
+              {gene.gene_id}
             </InfoLink>
           </InfoRow>
-        )}
-        <InfoRow>
-          <InfoLabel>Region</InfoLabel>{' '}
-          <InfoValue>{gene.chrom}:{gene.start}-{gene.stop}</InfoValue>
-          {gene.strand && <InfoValue> (GRCh38, {gene.strand} strand)</InfoValue>}
-        </InfoRow>
-        <InfoRow>
-          <InfoLabel>External resources</InfoLabel>{' '}
-          <InfoLink
-            href={`https://ensembl.org/Homo_sapiens/Gene/Summary?g=${gene.gene_id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Ensembl
-          </InfoLink>
-          {', '}
-          <InfoLink
-            href={`https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=chr${gene.chrom}:${gene.start}-${gene.stop}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            UCSC Browser
-          </InfoLink>
-          {branding.external_links?.map((link) => (
-            <span key={link.url}>
-              {', '}
+          {gene.canonical_transcript_id && (
+            <InfoRow>
+              <InfoLabel>Canonical transcript</InfoLabel>{' '}
               <InfoLink
-                href={link.url}
+                href={`https://ensembl.org/Homo_sapiens/Transcript/Summary?t=${gene.canonical_transcript_id}`}
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                {link.label}
+                {gene.canonical_transcript_id}
               </InfoLink>
-            </span>
-          ))}
-        </InfoRow>
-      </GeneInfo>
+            </InfoRow>
+          )}
+          <InfoRow>
+            <InfoLabel>Region</InfoLabel>{' '}
+            <InfoValue>{gene.chrom}:{gene.start}-{gene.stop}</InfoValue>
+            {gene.strand && <InfoValue> (GRCh38, {gene.strand} strand)</InfoValue>}
+          </InfoRow>
+          <InfoRow>
+            <InfoLabel>External resources</InfoLabel>{' '}
+            <InfoLink
+              href={`https://ensembl.org/Homo_sapiens/Gene/Summary?g=${gene.gene_id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Ensembl
+            </InfoLink>
+            {', '}
+            <InfoLink
+              href={`https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38&position=chr${gene.chrom}:${gene.start}-${gene.stop}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              UCSC Browser
+            </InfoLink>
+            {branding.external_links?.map((link) => (
+              <span key={link.url}>
+                {', '}
+                <InfoLink
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {link.label}
+                </InfoLink>
+              </span>
+            ))}
+          </InfoRow>
+        </GeneInfo>
+
+        {gene.constraint && (
+          <ConstraintTable constraint={gene.constraint} />
+        )}
+      </GeneInfoRow>
 
       {(variants.length > 0 || streamingStatus === 'streaming') && (
         <>

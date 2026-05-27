@@ -35,6 +35,7 @@ impl DuckDbGeneRow {
             canonical_transcript_id: self.canonical_transcript_id,
             transcripts,
             exons: None,
+            constraint: None,
         })
     }
 }

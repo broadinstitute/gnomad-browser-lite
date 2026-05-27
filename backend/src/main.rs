@@ -60,17 +60,22 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>
         BackendConfig::Hail {
             variants_path,
             genes_path,
+            constraint_path,
             vep_gff3,
             vep_fasta,
         } => {
             tracing::info!("Initializing Hail backend");
             tracing::info!("  Variants: {}", variants_path);
             tracing::info!("  Genes: {}", genes_path);
+            if let Some(cp) = constraint_path {
+                tracing::info!("  Constraint: {}", cp);
+            }
             if let Some(gff3) = vep_gff3 {
                 tracing::info!("  VEP GFF3: {}", gff3);
             }
             let vp = variants_path.clone();
             let gp = genes_path.clone();
+            let cp = constraint_path.clone();
             let vep_cfg = vep_gff3.as_ref().map(|gff3| {
                 crate::backend::hail::VepConfig {
                     gff3: gff3.clone(),
@@ -80,7 +85,7 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>
             // Open tables in a separate thread to avoid blocking tokio runtime
             // (genohype-core's GCS client uses its own blocking runtime internally)
             let backend = std::thread::spawn(move || {
-                HailBackend::new(&vp, &gp, vep_cfg)
+                HailBackend::new(&vp, &gp, cp.as_deref(), vep_cfg)
             }).join().map_err(|_| anyhow::anyhow!("Hail backend init thread panicked"))??;
             let source_info = backend.source_info();
             Ok((Box::new(backend), Some(source_info)))

@@ -216,7 +216,29 @@ impl From<api::Gene> for mcp::GeneSummary {
             stop: g.stop,
             strand: g.strand,
             canonical_transcript_id: g.canonical_transcript_id,
-            constraint: None, // constraint not available in api::Gene
+            constraint: g.constraint.map(|c| mcp::GeneConstraint {
+                exp_lof: c.exp_lof,
+                exp_mis: c.exp_mis,
+                exp_syn: c.exp_syn,
+                obs_lof: c.obs_lof,
+                obs_mis: c.obs_mis,
+                obs_syn: c.obs_syn,
+                oe_lof: c.oe_lof,
+                oe_lof_lower: c.oe_lof_lower,
+                oe_lof_upper: c.oe_lof_upper,
+                oe_mis: c.oe_mis,
+                oe_mis_lower: c.oe_mis_lower,
+                oe_mis_upper: c.oe_mis_upper,
+                oe_syn: c.oe_syn,
+                oe_syn_lower: c.oe_syn_lower,
+                oe_syn_upper: c.oe_syn_upper,
+                lof_z: c.lof_z,
+                mis_z: c.mis_z,
+                syn_z: c.syn_z,
+                pli: c.pli,
+                loeuf: c.loeuf,
+                flags: c.flags,
+            }),
         }
     }
 }

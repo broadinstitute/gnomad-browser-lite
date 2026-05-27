@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt};
 use genohype_core::codec::EncodedValue;
-use genohype_core::genomic::extract::{as_i32, as_string, get_field, get_nested_field};
+use genohype_core::genomic::extract::{as_f64, as_i32, as_string, get_field, get_nested_field};
 use genohype_core::metadata::CacheOptions;
 use genohype_core::projection::{FieldPath, ProjectionTree};
 use genohype_core::query::{IntervalList, QueryEngine};
@@ -54,9 +54,23 @@ static GENE_SEARCH_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| 
     ]))
 });
 
+/// Projection for constraint table — all fields needed for the full GeneConstraint.
+static CONSTRAINT_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
+    Arc::new(ProjectionTree::from_fields(&[
+        FieldPath::parse("gene_id").unwrap(),
+        FieldPath::parse("canonical").unwrap(),
+        FieldPath::parse("mane_select").unwrap(),
+        FieldPath::parse("lof").unwrap(),
+        FieldPath::parse("mis").unwrap(),
+        FieldPath::parse("syn").unwrap(),
+        FieldPath::parse("constraint_flags").unwrap(),
+    ]))
+});
+
 use super::VariantBackend;
 use crate::models::api::{
-    Exon, Gene, SearchResult, Transcript, TranscriptConsequence, Variant, VariantDetails,
+    Exon, Gene, GeneConstraint, SearchResult, Transcript, TranscriptConsequence, Variant,
+    VariantDetails,
 };
 
 /// Default GCS paths for public gnomAD data
@@ -70,6 +84,8 @@ pub struct HailBackend {
     genes_engine: Arc<RwLock<QueryEngine>>,
     /// symbol (uppercase) → gene_id mapping built at startup
     symbol_to_gene_id: Arc<HashMap<String, String>>,
+    /// gene_id → constraint metrics loaded from optional constraint table
+    constraint_map: Arc<HashMap<String, GeneConstraint>>,
     variants_path: String,
 }
 
@@ -80,7 +96,7 @@ pub struct VepConfig {
 }
 
 impl HailBackend {
-    pub fn new(variants_path: &str, genes_path: &str, vep: Option<VepConfig>) -> Result<Self> {
+    pub fn new(variants_path: &str, genes_path: &str, constraint_path: Option<&str>, vep: Option<VepConfig>) -> Result<Self> {
         let cache_opts = Some(CacheOptions::default());
         let mut variants_engine = QueryEngine::open_path_cached(variants_path, cache_opts.clone())
             .context("Failed to open variants table")?;
@@ -128,10 +144,94 @@ impl HailBackend {
         }
         info!("Built gene symbol index: {} symbols", symbol_map.len());
 
+        // Load constraint metrics if path is provided
+        let constraint_map = if let Some(cp) = constraint_path {
+            info!("Loading constraint metrics from {}", cp);
+            let constraint_engine = QueryEngine::open_path_cached(cp, Some(CacheOptions::default()))
+                .context("Failed to open constraint table")?;
+            let projection = Arc::clone(&CONSTRAINT_PROJECTION);
+            let mut map = HashMap::new();
+            for row_result in constraint_engine.query_iter_with_projection(&[], None, Some(projection))? {
+                let row = match row_result {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                // Only include canonical transcripts
+                let is_canonical = get_field(&row, "canonical")
+                    .and_then(|v| match v {
+                        EncodedValue::Boolean(b) => Some(*b),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                if !is_canonical {
+                    continue;
+                }
+                let gene_id = match get_field(&row, "gene_id").and_then(as_string) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                // Skip if already in the map (one entry per gene)
+                if map.contains_key(&gene_id) {
+                    continue;
+                }
+                let as_opt_i64 = |v: Option<&EncodedValue>| -> Option<i64> {
+                    v.and_then(|val| match val {
+                        EncodedValue::Int32(i) => Some(*i as i64),
+                        EncodedValue::Int64(i) => Some(*i),
+                        EncodedValue::Float64(f) => Some(*f as i64),
+                        _ => None,
+                    })
+                };
+
+                let exp_lof = get_nested_field(&row, "lof.exp").and_then(as_f64);
+                let exp_mis = get_nested_field(&row, "mis.exp").and_then(as_f64);
+                let exp_syn = get_nested_field(&row, "syn.exp").and_then(as_f64);
+                let obs_lof = as_opt_i64(get_nested_field(&row, "lof.obs"));
+                let obs_mis = as_opt_i64(get_nested_field(&row, "mis.obs"));
+                let obs_syn = as_opt_i64(get_nested_field(&row, "syn.obs"));
+                let oe_lof = get_nested_field(&row, "lof.oe").and_then(as_f64);
+                let oe_lof_lower = get_nested_field(&row, "lof.oe_ci.lower").and_then(as_f64);
+                let oe_lof_upper = get_nested_field(&row, "lof.oe_ci.upper").and_then(as_f64);
+                let oe_mis = get_nested_field(&row, "mis.oe").and_then(as_f64);
+                let oe_mis_lower = get_nested_field(&row, "mis.oe_ci.lower").and_then(as_f64);
+                let oe_mis_upper = get_nested_field(&row, "mis.oe_ci.upper").and_then(as_f64);
+                let oe_syn = get_nested_field(&row, "syn.oe").and_then(as_f64);
+                let oe_syn_lower = get_nested_field(&row, "syn.oe_ci.lower").and_then(as_f64);
+                let oe_syn_upper = get_nested_field(&row, "syn.oe_ci.upper").and_then(as_f64);
+                let lof_z = get_nested_field(&row, "lof.z_score").and_then(as_f64);
+                let mis_z = get_nested_field(&row, "mis.z_score").and_then(as_f64);
+                let syn_z = get_nested_field(&row, "syn.z_score").and_then(as_f64);
+                let pli = get_nested_field(&row, "lof.pLI").and_then(as_f64);
+                let loeuf = oe_lof_upper;
+                let flags = get_field(&row, "constraint_flags").and_then(|v| {
+                    if let EncodedValue::Array(arr) = v {
+                        let strs: Vec<String> = arr.iter().filter_map(|a| a.as_string()).collect();
+                        if strs.is_empty() { None } else { Some(strs) }
+                    } else {
+                        None
+                    }
+                });
+                map.insert(gene_id, GeneConstraint {
+                    exp_lof, exp_mis, exp_syn,
+                    obs_lof, obs_mis, obs_syn,
+                    oe_lof, oe_lof_lower, oe_lof_upper,
+                    oe_mis, oe_mis_lower, oe_mis_upper,
+                    oe_syn, oe_syn_lower, oe_syn_upper,
+                    lof_z, mis_z, syn_z,
+                    pli, loeuf, flags,
+                });
+            }
+            info!("Loaded constraint metrics for {} genes", map.len());
+            map
+        } else {
+            HashMap::new()
+        };
+
         Ok(Self {
             variants_engine: Arc::new(variants_engine),
             genes_engine: Arc::new(RwLock::new(genes_engine)),
             symbol_to_gene_id: Arc::new(symbol_map),
+            constraint_map: Arc::new(constraint_map),
             variants_path: variants_path.to_string(),
         })
     }
@@ -146,7 +246,7 @@ impl HailBackend {
     }
 
     pub fn with_defaults() -> Result<Self> {
-        Self::new(DEFAULT_VARIANTS_PATH, DEFAULT_GENES_PATH, None)
+        Self::new(DEFAULT_VARIANTS_PATH, DEFAULT_GENES_PATH, None, None)
     }
 }
 
@@ -192,6 +292,7 @@ fn extract_gene(row: &EncodedValue) -> Option<Gene> {
         canonical_transcript_id,
         transcripts,
         exons,
+        constraint: None,
     })
 }
 
@@ -651,6 +752,7 @@ fn extract_transcript_consequences(row: &EncodedValue) -> Option<Vec<TranscriptC
 impl VariantBackend for HailBackend {
     async fn get_gene(&self, gene_id: &str) -> Result<Option<Gene>> {
         let genes_engine = Arc::clone(&self.genes_engine);
+        let constraint_map = Arc::clone(&self.constraint_map);
         let gene_id = gene_id.to_string();
 
         tokio::task::spawn_blocking(move || -> Result<Option<Gene>> {
@@ -663,7 +765,14 @@ impl VariantBackend for HailBackend {
             )]);
 
             match engine.lookup(&key)? {
-                Some(row) => Ok(extract_gene(&row)),
+                Some(row) => {
+                    let mut gene = match extract_gene(&row) {
+                        Some(g) => g,
+                        None => return Ok(None),
+                    };
+                    gene.constraint = constraint_map.get(&gene.gene_id).cloned();
+                    Ok(Some(gene))
+                }
                 None => Ok(None),
             }
         })

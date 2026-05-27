@@ -6,6 +6,7 @@ vite_port = 5900
 type = "hail"
 variants_path = "gs://gcp-public-data--gnomad/release/4.1.1/ht/browser/gnomad.browser.v4.1.1.sites.ht"
 genes_path = "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht"
+constraint_path = "gs://gcp-public-data--gnomad/release/4.1.1/constraint/gnomad.v4.1.1.constraint_metrics.ht"
 
 [branding]
 name = "gnomAD Browser Lite"

@@ -79,6 +79,8 @@ pub enum BackendConfig {
     Hail {
         variants_path: String,
         genes_path: String,
+        /// Path to gnomAD constraint metrics Hail table (optional).
+        constraint_path: Option<String>,
         /// Path to GFF3 for on-the-fly VEP annotation (enables AnnotatingDataSource wrapping).
         vep_gff3: Option<String>,
         /// Path to reference FASTA for HGVS notation (requires vep_gff3).
@@ -101,6 +103,7 @@ impl Default for Config {
             backend: BackendConfig::Hail {
                 variants_path: DEFAULT_VARIANTS_PATH.to_string(),
                 genes_path: DEFAULT_GENES_PATH.to_string(),
+                constraint_path: None,
                 vep_gff3: None,
                 vep_fasta: None,
             },

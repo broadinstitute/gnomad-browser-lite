@@ -37,6 +37,30 @@ export interface Transcript {
   exons: Exon[];
 }
 
+export interface GeneConstraint {
+  exp_lof?: number;
+  exp_mis?: number;
+  exp_syn?: number;
+  obs_lof?: number;
+  obs_mis?: number;
+  obs_syn?: number;
+  oe_lof?: number;
+  oe_lof_lower?: number;
+  oe_lof_upper?: number;
+  oe_mis?: number;
+  oe_mis_lower?: number;
+  oe_mis_upper?: number;
+  oe_syn?: number;
+  oe_syn_lower?: number;
+  oe_syn_upper?: number;
+  lof_z?: number;
+  mis_z?: number;
+  syn_z?: number;
+  pli?: number;
+  loeuf?: number;
+  flags?: string[];
+}
+
 export interface Gene {
   gene_id: string;
   gene_symbol?: string;
@@ -49,6 +73,7 @@ export interface Gene {
   transcripts?: Transcript[];
   // Convenience: canonical transcript exons (populated from gnomAD API)
   exons?: Exon[];
+  constraint?: GeneConstraint;
 }
 
 // Helper to get gene symbol (handles both field names)

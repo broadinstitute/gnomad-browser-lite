@@ -26,6 +26,7 @@ clap = { version = "4.4", features = ["derive"] }
 toml = "0.8"
 pulldown-cmark = "0.12"
 clickhouse = { version = "0.12", features = ["time"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "json"] }
 genohype-pool = { path = "../../genohype/pool" }
 genohype-mcp = { path = "../../genohype/mcp" }
 rmcp = { version = "1.7", features = ["server", "transport-io"] }

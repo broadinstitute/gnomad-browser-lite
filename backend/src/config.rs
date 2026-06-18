@@ -90,6 +90,16 @@ pub enum BackendConfig {
         url: String,
         database: String,
     },
+    /// Postgres JSONB wide-table backend (benchmark arm `postgres`).
+    ///
+    /// ```toml
+    /// [backend]
+    /// type = "postgres"
+    /// database_url = "postgres://user:pass@localhost:5432/gnomad"
+    /// ```
+    Postgres {
+        database_url: String,
+    },
     Tiered {
         fast: Box<BackendConfig>,
         fallback: Box<BackendConfig>,

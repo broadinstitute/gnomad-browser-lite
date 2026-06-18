@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod mcp;
 mod models;
+mod oracle;
 mod worker;
 
 use axum::{
@@ -27,6 +28,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::backend::clickhouse::ClickHouseBackend;
 use crate::backend::duckdb::DuckDbBackend;
 use crate::backend::hail::HailBackend;
+use crate::backend::postgres::PostgresBackend;
 use crate::backend::tiered::TieredBackend;
 use crate::backend::VariantBackend;
 use crate::cli::{Cli, Commands, McpCommands};
@@ -97,6 +99,11 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>
                 database
             );
             let backend = ClickHouseBackend::new(url, database);
+            Ok((Box::new(backend), None))
+        }
+        BackendConfig::Postgres { database_url } => {
+            tracing::info!("Initializing Postgres backend");
+            let backend = PostgresBackend::new(database_url)?;
             Ok((Box::new(backend), None))
         }
         BackendConfig::Tiered { fast, fallback } => {
@@ -332,6 +339,12 @@ fn default_limit() -> usize {
 struct VariantQuery {
     #[serde(default)]
     force_fallback: bool,
+    /// When true, bypass the API `moka` cache entirely (read *and* write) so the
+    /// benchmark measures the datastore, not the cache. Injected by the runner
+    /// as `?no_cache=true` — the axis-1 default. See DESIGN.md "Confounder
+    /// controls".
+    #[serde(default)]
+    no_cache: bool,
 }
 
 // ==================== Handlers ====================
@@ -353,10 +366,13 @@ static X_CACHE: HeaderName = HeaderName::from_static("x-cache");
 async fn get_gene(
     State(state): State<AppState>,
     Path(gene_id): Path<String>,
+    Query(params): Query<VariantQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
-    // Check cache
+    // Check cache (unless bypassed for benchmarking)
     let cache_key = format!("gene:{}", gene_id);
-    if let Some(cached) = state.cache.get(&cache_key).await {
+    if !params.no_cache
+        && let Some(cached) = state.cache.get(&cache_key).await
+    {
         return Ok((
             [(X_CACHE.clone(), "moka-hit")],
             Json(serde_json::from_slice::<Value>(&cached).unwrap()),
@@ -372,10 +388,15 @@ async fn get_gene(
     match result {
         Ok(Some(gene)) => {
             let json_val = serde_json::to_value(&gene).unwrap();
-            // Cache the result
-            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
-            state.cache.insert(cache_key, bytes).await;
-            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
+            // Cache the result (unless bypassed)
+            if !params.no_cache {
+                let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+                state.cache.insert(cache_key, bytes).await;
+            }
+            Ok((
+                [(X_CACHE.clone(), if params.no_cache { "bypass" } else { "miss" })],
+                Json(json_val),
+            ))
         }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
@@ -396,9 +417,11 @@ async fn get_gene_variants(
     Path(gene_id): Path<String>,
     Query(params): Query<VariantQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
-    // Check cache
+    // Check cache (unless bypassed for benchmarking)
     let cache_key = format!("gene_variants:{}:fb={}", gene_id, params.force_fallback);
-    if let Some(cached) = state.cache.get(&cache_key).await {
+    if !params.no_cache
+        && let Some(cached) = state.cache.get(&cache_key).await
+    {
         return Ok((
             [(X_CACHE.clone(), "moka-hit")],
             Json(serde_json::from_slice::<Value>(&cached).unwrap()),
@@ -449,9 +472,14 @@ async fn get_gene_variants(
                 variants,
             };
             let json_val = serde_json::to_value(&response).unwrap();
-            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
-            state.cache.insert(cache_key, bytes).await;
-            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
+            if !params.no_cache {
+                let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+                state.cache.insert(cache_key, bytes).await;
+            }
+            Ok((
+                [(X_CACHE.clone(), if params.no_cache { "bypass" } else { "miss" })],
+                Json(json_val),
+            ))
         }
         Err(e) => {
             tracing::error!("Error fetching variants for {}: {}", gene_id, e);
@@ -906,9 +934,11 @@ async fn get_region_variants(
         }
     };
 
-    // Check cache
+    // Check cache (unless bypassed for benchmarking)
     let cache_key = format!("region:{}:{}-{}:fb={}", chrom, start, end, params.force_fallback);
-    if let Some(cached) = state.cache.get(&cache_key).await {
+    if !params.no_cache
+        && let Some(cached) = state.cache.get(&cache_key).await
+    {
         return Ok((
             [(X_CACHE.clone(), "moka-hit")],
             Json(serde_json::from_slice::<Value>(&cached).unwrap()),
@@ -931,9 +961,14 @@ async fn get_region_variants(
                 variants,
             };
             let json_val = serde_json::to_value(&response).unwrap();
-            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
-            state.cache.insert(cache_key, bytes).await;
-            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
+            if !params.no_cache {
+                let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+                state.cache.insert(cache_key, bytes).await;
+            }
+            Ok((
+                [(X_CACHE.clone(), if params.no_cache { "bypass" } else { "miss" })],
+                Json(json_val),
+            ))
         }
         Err(e) => {
             tracing::error!("Error fetching region {}: {}", region_id, e);
@@ -973,9 +1008,11 @@ async fn get_variant_detail(
     Path(variant_id): Path<String>,
     Query(params): Query<VariantQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
-    // Check cache
+    // Check cache (unless bypassed for benchmarking)
     let cache_key = format!("variant:{}:fb={}", variant_id, params.force_fallback);
-    if let Some(cached) = state.cache.get(&cache_key).await {
+    if !params.no_cache
+        && let Some(cached) = state.cache.get(&cache_key).await
+    {
         return Ok((
             [(X_CACHE.clone(), "moka-hit")],
             Json(serde_json::from_slice::<Value>(&cached).unwrap()),
@@ -989,9 +1026,14 @@ async fn get_variant_detail(
     {
         Ok(Some(variant)) => {
             let json_val = serde_json::to_value(&variant).unwrap();
-            let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
-            state.cache.insert(cache_key, bytes).await;
-            Ok(([(X_CACHE.clone(), "miss")], Json(json_val)))
+            if !params.no_cache {
+                let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
+                state.cache.insert(cache_key, bytes).await;
+            }
+            Ok((
+                [(X_CACHE.clone(), if params.no_cache { "bypass" } else { "miss" })],
+                Json(json_val),
+            ))
         }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,

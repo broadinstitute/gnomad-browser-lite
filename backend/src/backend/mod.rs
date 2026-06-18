@@ -1,13 +1,29 @@
 pub mod clickhouse;
 pub mod duckdb;
 pub mod hail;
+pub mod postgres;
 pub mod tiered;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
+use serde::Serialize;
 
 use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
+
+/// Per-request split timing emitted by a backend.
+///
+/// The benchmark needs to separate raw datastore work (`db_query_ms`: query
+/// execution + row transfer) from JSON deserialization (`deserialize_ms`:
+/// turning the stored document into the API model). Without this split, Rust's
+/// fast `serde_json` would mask the actual database latency — see DESIGN.md
+/// "Confounder controls". Backends capture this internally and expose it via
+/// `*_timed` methods; the trait methods themselves just log it.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct QueryStats {
+    pub db_query_ms: f64,
+    pub deserialize_ms: f64,
+}
 
 /// Trait defining the contract all data backends must fulfill.
 ///

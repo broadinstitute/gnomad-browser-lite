@@ -268,7 +268,7 @@ async fn main() -> anyhow::Result<()> {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
-        .expose_headers([X_CACHE.clone()]);
+        .expose_headers([X_CACHE.clone(), SERVER_TIMING.clone()]);
 
     // Build router
     let app = Router::new()
@@ -363,6 +363,42 @@ async fn get_config(State(state): State<AppState>) -> Json<BrandingConfig> {
 /// Header name for cache status
 static X_CACHE: HeaderName = HeaderName::from_static("x-cache");
 
+/// Header name for split server timing.
+///
+/// We surface the backend's per-layer split (`db_query_ms`, `deserialize_ms`,
+/// from `QueryStats`) on the W3C-standard `Server-Timing` response header rather
+/// than in the JSON body. Rationale: it matches the existing header-based
+/// convention here (`x-cache`), keeps the body identical to the non-benchmarked
+/// response (so the oracle still compares bodies unchanged), and lets the
+/// benchmark runner read timing without parsing every payload. Doing it in ONE
+/// helper (`with_timing`) means every backend benefits uniformly — Phase 1b
+/// (Elasticsearch) only has to populate `QueryStats`. See DESIGN.md "Split
+/// timing": `api_route_ms → db_query_ms → deserialize_ms → serialize_ms`.
+static SERVER_TIMING: HeaderName = HeaderName::from_static("server-timing");
+
+/// Format a `QueryStats` as a `Server-Timing` header value, e.g.
+/// `db;dur=12.3, deserialize;dur=4.5`. The metric names (`db`, `deserialize`)
+/// carry the `db_query_ms` / `deserialize_ms` split the runner records.
+fn server_timing_value(stats: &crate::backend::QueryStats) -> String {
+    format!(
+        "db;dur={:.3}, deserialize;dur={:.3}",
+        stats.db_query_ms, stats.deserialize_ms
+    )
+}
+
+/// Build the shared response-header pair: `x-cache` (existing semantics) plus
+/// `Server-Timing` carrying the backend split timing. Used by every benchmarked
+/// handler so the transport stays consistent and DRY.
+fn timing_headers(
+    cache_status: &str,
+    stats: &crate::backend::QueryStats,
+) -> [(HeaderName, String); 2] {
+    [
+        (X_CACHE.clone(), cache_status.to_string()),
+        (SERVER_TIMING.clone(), server_timing_value(stats)),
+    ]
+}
+
 async fn get_gene(
     State(state): State<AppState>,
     Path(gene_id): Path<String>,
@@ -423,7 +459,7 @@ async fn get_gene_variants(
         && let Some(cached) = state.cache.get(&cache_key).await
     {
         return Ok((
-            [(X_CACHE.clone(), "moka-hit")],
+            timing_headers("moka-hit", &crate::backend::QueryStats::default()),
             Json(serde_json::from_slice::<Value>(&cached).unwrap()),
         ));
     }
@@ -462,10 +498,10 @@ async fn get_gene_variants(
 
     match state
         .backend
-        .get_variants(&chrom, gene.start, gene.stop, params.force_fallback)
+        .get_variants_timed(&chrom, gene.start, gene.stop, params.force_fallback)
         .await
     {
-        Ok(variants) => {
+        Ok((variants, stats)) => {
             let response = api::GeneVariantsResponse {
                 gene,
                 total: variants.len(),
@@ -477,7 +513,7 @@ async fn get_gene_variants(
                 state.cache.insert(cache_key, bytes).await;
             }
             Ok((
-                [(X_CACHE.clone(), if params.no_cache { "bypass" } else { "miss" })],
+                timing_headers(if params.no_cache { "bypass" } else { "miss" }, &stats),
                 Json(json_val),
             ))
         }
@@ -940,17 +976,17 @@ async fn get_region_variants(
         && let Some(cached) = state.cache.get(&cache_key).await
     {
         return Ok((
-            [(X_CACHE.clone(), "moka-hit")],
+            timing_headers("moka-hit", &crate::backend::QueryStats::default()),
             Json(serde_json::from_slice::<Value>(&cached).unwrap()),
         ));
     }
 
     match state
         .backend
-        .get_variants(&chrom, start, end, params.force_fallback)
+        .get_variants_timed(&chrom, start, end, params.force_fallback)
         .await
     {
-        Ok(variants) => {
+        Ok((variants, stats)) => {
             let response = api::RegionVariantsResponse {
                 region: api::RegionInfo {
                     chrom,
@@ -966,7 +1002,7 @@ async fn get_region_variants(
                 state.cache.insert(cache_key, bytes).await;
             }
             Ok((
-                [(X_CACHE.clone(), if params.no_cache { "bypass" } else { "miss" })],
+                timing_headers(if params.no_cache { "bypass" } else { "miss" }, &stats),
                 Json(json_val),
             ))
         }
@@ -1014,28 +1050,28 @@ async fn get_variant_detail(
         && let Some(cached) = state.cache.get(&cache_key).await
     {
         return Ok((
-            [(X_CACHE.clone(), "moka-hit")],
+            timing_headers("moka-hit", &crate::backend::QueryStats::default()),
             Json(serde_json::from_slice::<Value>(&cached).unwrap()),
         ));
     }
 
     match state
         .backend
-        .get_variant_detail(&variant_id, params.force_fallback)
+        .get_variant_detail_timed(&variant_id, params.force_fallback)
         .await
     {
-        Ok(Some(variant)) => {
+        Ok((Some(variant), stats)) => {
             let json_val = serde_json::to_value(&variant).unwrap();
             if !params.no_cache {
                 let bytes = Bytes::from(serde_json::to_vec(&json_val).unwrap());
                 state.cache.insert(cache_key, bytes).await;
             }
             Ok((
-                [(X_CACHE.clone(), if params.no_cache { "bypass" } else { "miss" })],
+                timing_headers(if params.no_cache { "bypass" } else { "miss" }, &stats),
                 Json(json_val),
             ))
         }
-        Ok(None) => Err((
+        Ok((None, _stats)) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "Variant not found", "variant_id": variant_id })),
         )),

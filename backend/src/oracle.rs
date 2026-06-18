@@ -86,6 +86,13 @@ pub fn golden_queries() -> Vec<OracleQuery> {
             start: 10_510_000,
             end: 10_520_000,
         },
+        // A point lookup for a known PCSK9 variant — exercises the variant-by-id
+        // (`get_variant_detail`) access pattern, so the detail path is asserted
+        // for parity alongside the region scans. Falls inside the PCSK9 gene-body
+        // golden region above, so it resolves against the subset loaders.
+        OracleQuery::VariantDetail {
+            variant_id: "1-55039847-G-A".to_string(),
+        },
     ]
 }
 

@@ -60,6 +60,37 @@ pub trait VariantBackend: Send + Sync {
         force_fallback: bool,
     ) -> Result<Option<VariantDetails>>;
 
+    /// Region query returning the variants *plus* split timing.
+    ///
+    /// This is the benchmarked path: the HTTP layer calls this (not the plain
+    /// `get_variants`) so it can surface `db_query_ms` / `deserialize_ms` on the
+    /// response (see DESIGN.md "Split timing"). The default impl forwards to
+    /// `get_variants` and reports zeroed stats, so backends that haven't yet
+    /// instrumented timing (DuckDB, Hail, ClickHouse, Tiered) keep compiling and
+    /// serving; instrumented backends (Postgres, and later Elasticsearch)
+    /// override it to fill the stats in.
+    async fn get_variants_timed(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+        force_fallback: bool,
+    ) -> Result<(Vec<Variant>, QueryStats)> {
+        let variants = self.get_variants(chrom, start, end, force_fallback).await?;
+        Ok((variants, QueryStats::default()))
+    }
+
+    /// Variant-by-id detail lookup returning the detail *plus* split timing.
+    /// Defaulted the same way as `get_variants_timed`.
+    async fn get_variant_detail_timed(
+        &self,
+        variant_id: &str,
+        force_fallback: bool,
+    ) -> Result<(Option<VariantDetails>, QueryStats)> {
+        let detail = self.get_variant_detail(variant_id, force_fallback).await?;
+        Ok((detail, QueryStats::default()))
+    }
+
     /// Stream variants in a genomic region as they are decoded.
     /// If `regions` is provided, only query those sub-regions (e.g., exon intervals).
     /// Default implementation calls `get_variants` and wraps the Vec into a stream.

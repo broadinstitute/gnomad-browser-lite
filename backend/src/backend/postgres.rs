@@ -78,7 +78,7 @@ impl PostgresBackend {
     /// `db_query_ms` covers query execution + row transfer (the JSONB is cast to
     /// text in the DB, so de-TOAST cost is attributed to the database); the
     /// `deserialize_ms` covers parsing + mapping into `api::Variant`.
-    pub async fn get_variants_timed(
+    async fn region_variants_timed(
         &self,
         chrom: &str,
         start: i64,
@@ -123,7 +123,7 @@ impl PostgresBackend {
     }
 
     /// Variant-by-id detail lookup returning the detail plus split timing.
-    pub async fn get_variant_detail_timed(
+    async fn point_variant_detail_timed(
         &self,
         variant_id: &str,
     ) -> Result<(Option<VariantDetails>, QueryStats)> {
@@ -221,7 +221,7 @@ impl VariantBackend for PostgresBackend {
         end: i64,
         _force_fallback: bool,
     ) -> Result<Vec<Variant>> {
-        let (variants, stats) = self.get_variants_timed(chrom, start, end).await?;
+        let (variants, stats) = self.region_variants_timed(chrom, start, end).await?;
         tracing::debug!(
             chrom,
             start,
@@ -239,7 +239,7 @@ impl VariantBackend for PostgresBackend {
         variant_id: &str,
         _force_fallback: bool,
     ) -> Result<Option<VariantDetails>> {
-        let (detail, stats) = self.get_variant_detail_timed(variant_id).await?;
+        let (detail, stats) = self.point_variant_detail_timed(variant_id).await?;
         tracing::debug!(
             variant_id,
             db_query_ms = stats.db_query_ms,
@@ -247,6 +247,24 @@ impl VariantBackend for PostgresBackend {
             "postgres get_variant_detail"
         );
         Ok(detail)
+    }
+
+    async fn get_variants_timed(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+        _force_fallback: bool,
+    ) -> Result<(Vec<Variant>, QueryStats)> {
+        self.region_variants_timed(chrom, start, end).await
+    }
+
+    async fn get_variant_detail_timed(
+        &self,
+        variant_id: &str,
+        _force_fallback: bool,
+    ) -> Result<(Option<VariantDetails>, QueryStats)> {
+        self.point_variant_detail_timed(variant_id).await
     }
 }
 

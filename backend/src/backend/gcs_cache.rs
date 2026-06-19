@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 use super::{QueryStats, VariantBackend};
 use crate::config::CacheMode;
-use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
+use crate::models::api::{Gene, GeneVariantsResponse, SearchResult, Variant, VariantDetails};
 
 /// Materialized-cache backend — "the database is a cache of responses".
 ///
@@ -36,12 +36,24 @@ use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
 ///   `get_gene_by_symbol`, `search_genes`, and `get_variant_detail` → delegated
 ///   to the `fallback` (conventionally `hail-gcs`).
 ///
-/// The cached unit is the **variant list** (`Vec<Variant>`), matching the Phase-4
-/// blob shape. Gene *metadata* (`get_gene`) is a cheap point lookup that the
-/// wrapped Hail backend answers at full fidelity (constraint metrics, transcript
-/// list) — the cache deliberately only intercepts the expensive part, the
-/// gene's variant payload. This keeps the oracle's gene/region/detail checks
-/// identical to the reference backend on cacheable queries.
+/// ## Blob contract (pinned in Phase 4)
+///
+/// The cached unit is the **full gene-view API response**
+/// ([`GeneVariantsResponse`] = `{ gene, variants, total }`), serialized by the
+/// Phase-4 `cache_builder` to `{gene_id}.json`. This one shape serves three
+/// consumers identically: this backend's `get_variants` (→ `.variants`) and
+/// `get_gene` (→ `.gene`), and the Phase-7 axis-3 browser-direct reader (which
+/// `fetch()`es the same blob and needs `.gene` to render the page). Storing a
+/// bare `Vec<Variant>` would force `get_gene` back through cold Hail on every
+/// cached gene-view — partly defeating the O(1) goal and diverging from the
+/// browser contract — so the precomputed (`mem`/`file`) modes serve gene
+/// metadata straight from the blob too, making the cached path fully
+/// server-side-query-free.
+///
+/// The `lazy` mode is the exception: it warms on demand from the fallback's
+/// `get_variants` (which yields only variants, no gene), so its `get_gene` still
+/// delegates to the fallback — matching its "≈ current browser-lite behavior"
+/// definition.
 ///
 /// ## Cache methodology note
 ///
@@ -61,11 +73,15 @@ pub struct GcsCacheBackend {
 /// Backing store for the precomputed gene-view blobs, one variant per
 /// [`CacheMode`].
 enum CacheStore {
-    /// All gene-view blobs resident in RAM, keyed by gene_id.
-    Mem(HashMap<String, Arc<Vec<Variant>>>),
-    /// Per-hit read of `{dir}/{gene_id}.json` from local-SSD.
+    /// All gene-view blobs resident in RAM, keyed by gene_id. Each blob is the
+    /// full [`GeneVariantsResponse`], so both `get_variants` and `get_gene` are
+    /// served from RAM with no fallback query.
+    Mem(HashMap<String, Arc<GeneVariantsResponse>>),
+    /// Per-hit read of `{dir}/{gene_id}.json` (the full response) from local-SSD.
     File { dir: PathBuf },
-    /// Warm-on-demand `moka` cache over the fallback, keyed by gene_id.
+    /// Warm-on-demand `moka` cache over the fallback, keyed by gene_id. Lazy mode
+    /// warms from the fallback's `get_variants` (variants only), so it caches just
+    /// the variant list and `get_gene` falls through.
     Lazy(moka::future::Cache<String, Arc<Vec<Variant>>>),
 }
 
@@ -79,9 +95,10 @@ fn blob_path(dir: &PathBuf, gene_id: &str) -> PathBuf {
     dir.join(format!("{gene_id}.json"))
 }
 
-/// Parse a `{gene_id}.json` blob (a JSON array of [`Variant`]) from raw bytes.
-fn parse_blob(bytes: &[u8]) -> Result<Vec<Variant>> {
-    serde_json::from_slice::<Vec<Variant>>(bytes).context("malformed gene-view cache blob")
+/// Parse a `{gene_id}.json` blob (a full [`GeneVariantsResponse`]) from raw bytes.
+fn parse_blob(bytes: &[u8]) -> Result<GeneVariantsResponse> {
+    serde_json::from_slice::<GeneVariantsResponse>(bytes)
+        .context("malformed gene-view cache blob")
 }
 
 impl GcsCacheBackend {
@@ -117,14 +134,14 @@ impl GcsCacheBackend {
                 let dir = PathBuf::from(cache_dir.clone().ok_or_else(|| {
                     anyhow::anyhow!("gcs-cache mode=mem requires `cache_dir`")
                 })?);
-                let mut blobs: HashMap<String, Arc<Vec<Variant>>> = HashMap::new();
+                let mut blobs: HashMap<String, Arc<GeneVariantsResponse>> = HashMap::new();
                 let mut missing = 0usize;
                 for gene_id in gene_boundaries.values() {
                     let path = blob_path(&dir, gene_id);
                     match std::fs::read(&path) {
                         Ok(bytes) => match parse_blob(&bytes) {
-                            Ok(variants) => {
-                                blobs.insert(gene_id.clone(), Arc::new(variants));
+                            Ok(response) => {
+                                blobs.insert(gene_id.clone(), Arc::new(response));
                             }
                             Err(e) => warn!("gcs-cache: skipping {:?}: {}", path, e),
                         },
@@ -178,11 +195,36 @@ impl GcsCacheBackend {
 
 #[async_trait]
 impl VariantBackend for GcsCacheBackend {
-    // Gene metadata, symbol resolution, search, and variant-by-id all fall
-    // through: they are not part of the materialized (variant-payload) cache.
+    // Symbol resolution, search, and variant-by-id all fall through: they are not
+    // part of the materialized gene-view cache. `get_gene` is served from the
+    // precomputed blob (mem/file) so the cached gene-view path issues no
+    // server-side query at all; lazy mode falls through (it caches variants only).
 
     async fn get_gene(&self, gene_id: &str) -> Result<Option<Gene>> {
-        self.fallback.get_gene(gene_id).await
+        match &self.store {
+            CacheStore::Mem(blobs) => {
+                if let Some(blob) = blobs.get(gene_id) {
+                    debug!("gcs-cache: get_gene RAM hit for {}", gene_id);
+                    return Ok(Some(blob.gene.clone()));
+                }
+                self.fallback.get_gene(gene_id).await
+            }
+            CacheStore::File { dir } => {
+                let path = blob_path(dir, gene_id);
+                let parsed = tokio::task::spawn_blocking(move || {
+                    std::fs::read(&path).ok().and_then(|b| parse_blob(&b).ok())
+                })
+                .await?;
+                match parsed {
+                    Some(blob) => {
+                        debug!("gcs-cache: get_gene file hit for {}", gene_id);
+                        Ok(Some(blob.gene))
+                    }
+                    None => self.fallback.get_gene(gene_id).await,
+                }
+            }
+            CacheStore::Lazy(_) => self.fallback.get_gene(gene_id).await,
+        }
     }
 
     async fn get_gene_by_symbol(&self, symbol: &str) -> Result<Option<Gene>> {
@@ -246,12 +288,12 @@ impl VariantBackend for GcsCacheBackend {
 
         match &self.store {
             CacheStore::Mem(blobs) => {
-                if let Some(variants) = blobs.get(&gene_id) {
+                if let Some(blob) = blobs.get(&gene_id) {
                     debug!("gcs-cache: RAM hit for gene {}", gene_id);
                     // `db_query_ms` = the O(1) map lookup + clone out of RAM;
                     // there is no per-hit deserialization in mem mode.
                     let t = Instant::now();
-                    let out = variants.as_ref().clone();
+                    let out = blob.variants.clone();
                     let db_query_ms = t.elapsed().as_secs_f64() * 1e3;
                     return Ok((out, QueryStats { db_query_ms, deserialize_ms: 0.0 }));
                 }
@@ -266,7 +308,7 @@ impl VariantBackend for GcsCacheBackend {
                     let bytes = std::fs::read(&path).ok()?;
                     let io_ms = t_io.elapsed().as_secs_f64() * 1e3;
                     let t_de = Instant::now();
-                    let variants = parse_blob(&bytes).ok()?;
+                    let variants = parse_blob(&bytes).ok()?.variants;
                     let de_ms = t_de.elapsed().as_secs_f64() * 1e3;
                     Some((variants, io_ms, de_ms))
                 })
@@ -408,6 +450,20 @@ mod tests {
         }
     }
 
+    /// A full gene-view blob (the pinned [`GeneVariantsResponse`] contract).
+    fn response(gene_id: &str, chrom: &str, start: i64, stop: i64) -> GeneVariantsResponse {
+        let mut g = gene(gene_id, chrom, start, stop);
+        // Distinctive symbol so `get_gene` tests can tell a cache hit (this blob)
+        // from a fallback answer (TagBackend returns "FAKE").
+        g.gene_symbol = Some("CACHEGENE".into());
+        let variants = vec![variant(chrom, start + 10, "CACHE"), variant(chrom, start + 50, "CACHE")];
+        GeneVariantsResponse {
+            total: variants.len(),
+            gene: g,
+            variants,
+        }
+    }
+
     /// One gene (`ENSG1`) on chr1 spanning 100..=200, with a prebuilt mem blob of
     /// two CACHE-tagged variants. The fallback tags everything COLD.
     fn mem_backend() -> GcsCacheBackend {
@@ -416,7 +472,7 @@ mod tests {
         let mut blobs = HashMap::new();
         blobs.insert(
             "ENSG1".to_string(),
-            Arc::new(vec![variant("chr1", 110, "CACHE"), variant("chr1", 150, "CACHE")]),
+            Arc::new(response("ENSG1", "chr1", 100, 200)),
         );
         GcsCacheBackend {
             fallback: Box::new(TagBackend { tag: "COLD" }),
@@ -469,6 +525,65 @@ mod tests {
         };
         let v = b.get_variants("chr1", 100, 200, false).await.unwrap();
         assert_eq!(tag_of(&v), "COLD");
+    }
+
+    #[tokio::test]
+    async fn get_gene_served_from_mem_cache() {
+        // mem/file modes serve gene metadata from the blob (no fallback query),
+        // so the cached gene-view path is fully server-side-query-free.
+        let b = mem_backend();
+        let g = b.get_gene("ENSG1").await.unwrap().unwrap();
+        assert_eq!(g.gene_symbol.as_deref(), Some("CACHEGENE"));
+        // A gene with no blob falls through to the fallback (TagBackend → "FAKE").
+        let g = b.get_gene("ENSG_UNBUILT").await.unwrap().unwrap();
+        assert_eq!(g.gene_symbol.as_deref(), Some("FAKE"));
+    }
+
+    #[test]
+    fn parse_blob_accepts_genohype_wire_format() {
+        // Cross-phase guard: a blob as the Phase-4 `cache_builder`
+        // (genohype/core/src/export/cache_builder.rs) emits it must deserialize
+        // into this backend's GeneVariantsResponse. This literal mirrors that
+        // crate's `CacheGeneVariantsResponse` serialization (skip-if-none fields
+        // omitted); if either side renames a field, this fails.
+        let wire = br#"{
+            "gene": {
+                "gene_id": "ENSG1",
+                "gene_symbol": "FAKE",
+                "chrom": "chr1",
+                "start": 100,
+                "stop": 200,
+                "strand": "+",
+                "canonical_transcript_id": "ENST1",
+                "exons": [{"feature_type": "CDS", "start": 120, "stop": 180}]
+            },
+            "variants": [
+                {"variant_id": "1-150-A-C", "pos": 150, "chrom": "chr1",
+                 "alleles": ["A", "C"], "consequence": "missense_variant",
+                 "ac": 3, "an": 1000, "af": 0.003, "allele_freq": 0.003}
+            ],
+            "total": 1
+        }"#;
+        let blob = parse_blob(wire).expect("genohype wire format must parse");
+        assert_eq!(blob.gene.gene_id, "ENSG1");
+        assert_eq!(blob.gene.gene_symbol.as_deref(), Some("FAKE"));
+        assert!(blob.gene.constraint.is_none());
+        assert_eq!(blob.total, 1);
+        assert_eq!(blob.variants[0].variant_id.as_deref(), Some("1-150-A-C"));
+        assert_eq!(blob.variants[0].ac, 3);
+    }
+
+    #[test]
+    fn blob_contract_round_trips() {
+        // Guards the pinned contract: a full GeneVariantsResponse serialized by the
+        // Phase-4 cache_builder must parse back through parse_blob. If a future
+        // change drops Deserialize or reverts to a bare Vec<Variant>, this fails.
+        let resp = response("ENSG1", "chr1", 100, 200);
+        let bytes = serde_json::to_vec(&resp).unwrap();
+        let parsed = parse_blob(&bytes).unwrap();
+        assert_eq!(parsed.gene.gene_id, "ENSG1");
+        assert_eq!(parsed.total, 2);
+        assert_eq!(parsed.variants.len(), 2);
     }
 
     #[tokio::test]

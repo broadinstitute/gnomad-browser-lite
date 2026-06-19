@@ -240,7 +240,12 @@ pub struct VariantDetails {
 
 // ==================== Response Wrappers ====================
 
-#[derive(Debug, Clone, Serialize)]
+// `Deserialize` is required so the `gcs-cache` backend (and the axis-3
+// browser-direct reader) can parse a precomputed `{gene_id}.json` blob back into
+// this exact shape. The Phase-4 cache builder writes this full response — not a
+// bare `Vec<Variant>` — so a single blob serves both the Rust cache arm
+// (`get_variants` → `.variants`, `get_gene` → `.gene`) and the browser arm.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneVariantsResponse {
     pub gene: Gene,
     pub variants: Vec<Variant>,

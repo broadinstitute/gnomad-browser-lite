@@ -310,4 +310,43 @@ mod tests {
         let duck = DuckDbBackend::new(Path::new(&duck_dir))?;
         assert_equivalent(&pg, &duck).await
     }
+
+    /// Full cross-backend equivalence check for the `es` arm. Skips (passes) when
+    /// the backends aren't configured via env, so `cargo test` is green without
+    /// infra. Run against a loaded ES (Phase 2a) + the DuckDB reference with:
+    ///
+    /// ```bash
+    /// ORACLE_ES_URL=http://localhost:9200 \
+    /// ORACLE_ES_VARIANTS_INDEX=gnomad_v4_variants \
+    /// ORACLE_ES_GENES_INDEX=genes_grch38 \
+    /// ORACLE_DUCKDB_DIR=/path/to/parquet/dir \
+    /// cargo test --package backend oracle_elasticsearch_vs_duckdb -- --nocapture
+    /// ```
+    #[tokio::test]
+    async fn oracle_elasticsearch_vs_duckdb() -> Result<()> {
+        use crate::backend::duckdb::DuckDbBackend;
+        use crate::backend::elasticsearch::{
+            ElasticsearchBackend, DEFAULT_GENES_INDEX, DEFAULT_VARIANTS_INDEX,
+        };
+        use std::path::Path;
+
+        let (Ok(es_url), Ok(duck_dir)) = (
+            std::env::var("ORACLE_ES_URL"),
+            std::env::var("ORACLE_DUCKDB_DIR"),
+        ) else {
+            eprintln!(
+                "oracle_elasticsearch_vs_duckdb: skipped (set ORACLE_ES_URL and ORACLE_DUCKDB_DIR to run)"
+            );
+            return Ok(());
+        };
+
+        let variants_index = std::env::var("ORACLE_ES_VARIANTS_INDEX")
+            .unwrap_or_else(|_| DEFAULT_VARIANTS_INDEX.to_string());
+        let genes_index = std::env::var("ORACLE_ES_GENES_INDEX")
+            .unwrap_or_else(|_| DEFAULT_GENES_INDEX.to_string());
+
+        let es = ElasticsearchBackend::new(&es_url, &variants_index, &genes_index)?;
+        let duck = DuckDbBackend::new(Path::new(&duck_dir))?;
+        assert_equivalent(&es, &duck).await
+    }
 }

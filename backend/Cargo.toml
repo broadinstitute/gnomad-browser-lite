@@ -27,6 +27,10 @@ toml = "0.8"
 pulldown-cmark = "0.12"
 clickhouse = { version = "0.12", features = ["time"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "json"] }
+# Official Elasticsearch client. Pinned to the 7.x line to match prod's ES 7.x
+# server major (DESIGN.md "es" arm). rustls avoids a system OpenSSL/native-tls
+# dependency on the benchmark VMs.
+elasticsearch = { version = "7.17.7-alpha.1", default-features = false, features = ["rustls-tls"] }
 genohype-pool = { path = "../../genohype/pool" }
 genohype-mcp = { path = "../../genohype/mcp" }
 rmcp = { version = "1.7", features = ["server", "transport-io"] }

@@ -2,7 +2,16 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use crate::backend::elasticsearch::{DEFAULT_GENES_INDEX, DEFAULT_VARIANTS_INDEX};
 use crate::backend::hail::{DEFAULT_GENES_PATH, DEFAULT_VARIANTS_PATH};
+
+fn default_es_variants_index() -> String {
+    DEFAULT_VARIANTS_INDEX.to_string()
+}
+
+fn default_es_genes_index() -> String {
+    DEFAULT_GENES_INDEX.to_string()
+}
 
 /// An external link shown in the navbar or on pages.
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -99,6 +108,23 @@ pub enum BackendConfig {
     /// ```
     Postgres {
         database_url: String,
+    },
+    /// Elasticsearch backend (benchmark arm `es`, the prod baseline).
+    ///
+    /// ```toml
+    /// [backend]
+    /// type = "elasticsearch"
+    /// url = "http://localhost:9200"
+    /// # optional; default to the prod-style index names:
+    /// variants_index = "gnomad_v4_variants"
+    /// genes_index = "genes_grch38"
+    /// ```
+    Elasticsearch {
+        url: String,
+        #[serde(default = "default_es_variants_index")]
+        variants_index: String,
+        #[serde(default = "default_es_genes_index")]
+        genes_index: String,
     },
     Tiered {
         fast: Box<BackendConfig>,

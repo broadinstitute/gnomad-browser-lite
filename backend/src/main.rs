@@ -27,6 +27,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::backend::clickhouse::ClickHouseBackend;
 use crate::backend::duckdb::DuckDbBackend;
+use crate::backend::elasticsearch::ElasticsearchBackend;
 use crate::backend::hail::HailBackend;
 use crate::backend::postgres::PostgresBackend;
 use crate::backend::tiered::TieredBackend;
@@ -104,6 +105,20 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>
         BackendConfig::Postgres { database_url } => {
             tracing::info!("Initializing Postgres backend");
             let backend = PostgresBackend::new(database_url)?;
+            Ok((Box::new(backend), None))
+        }
+        BackendConfig::Elasticsearch {
+            url,
+            variants_index,
+            genes_index,
+        } => {
+            tracing::info!(
+                "Initializing Elasticsearch backend (url: {}, variants: {}, genes: {})",
+                url,
+                variants_index,
+                genes_index
+            );
+            let backend = ElasticsearchBackend::new(url, variants_index, genes_index)?;
             Ok((Box::new(backend), None))
         }
         BackendConfig::Tiered { fast, fallback } => {

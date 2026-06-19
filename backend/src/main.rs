@@ -121,14 +121,47 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>
             let backend = ElasticsearchBackend::new(url, variants_index, genes_index)?;
             Ok((Box::new(backend), None))
         }
-        BackendConfig::Tiered { fast, fallback } => {
-            tracing::info!("Initializing TieredBackend (fast + fallback)");
+        BackendConfig::Tiered {
+            fast,
+            fallback,
+            routing,
+            genes_path,
+            cds_splice_buffer,
+            genebody_buffer,
+        } => {
+            tracing::info!("Initializing TieredBackend (routing={:?})", routing);
             let (fast_backend, source_info) = build_backend(fast)?;
             let (fallback_backend, _) = build_backend(fallback)?;
-            Ok((Box::new(TieredBackend {
-                fast: fast_backend,
-                fallback: fallback_backend,
-            }), source_info))
+
+            // Load gene geometry and build the hot-interval tree. The genohype
+            // GCS reader uses its own blocking runtime, so open it off the tokio
+            // runtime thread (same pattern as the Hail backend above).
+            tracing::info!("Loading hot intervals from {}", genes_path);
+            let gp = genes_path.clone();
+            let genes = std::thread::spawn(move || {
+                crate::backend::hail::load_genes_geometry(&gp)
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("Gene-interval loading thread panicked"))??;
+            let hot = crate::backend::tiered::HotIntervals::from_genes(
+                &genes,
+                *routing,
+                *cds_splice_buffer,
+                *genebody_buffer,
+            );
+            tracing::info!(
+                "Hot interval tree: {} contigs ({} genes scanned)",
+                hot.num_contigs(),
+                genes.len()
+            );
+            Ok((
+                Box::new(TieredBackend {
+                    fast: fast_backend,
+                    fallback: fallback_backend,
+                    hot,
+                }),
+                source_info,
+            ))
         }
     }
 }

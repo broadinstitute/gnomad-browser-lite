@@ -675,6 +675,7 @@ dependencies = [
  "pulldown-cmark",
  "rlimit",
  "rmcp",
+ "rust-lapper",
  "schemars",
  "serde",
  "serde_json",
@@ -3795,6 +3796,15 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rust-lapper"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aafed57460ca80eb88c33989af3a31348dbde8e68f86f4fe2107c1a5fcd55b8"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

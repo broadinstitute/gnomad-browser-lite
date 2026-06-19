@@ -38,3 +38,5 @@ schemars = "1"
 futures = "0.3"
 tokio-stream = "0.1"
 async-stream = "0.3"
+# Interval tree for the tiered router's hot/cold region routing (Phase 1c).
+rust-lapper = "1.1"

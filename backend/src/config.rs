@@ -13,6 +13,41 @@ fn default_es_genes_index() -> String {
     DEFAULT_GENES_INDEX.to_string()
 }
 
+fn default_tier_genes_path() -> String {
+    DEFAULT_GENES_PATH.to_string()
+}
+
+/// Default splice buffer (bp) added on each side of every CDS exon for the
+/// `tiered-cds` hot set, so canonical/extended splice-region variants just
+/// outside the coding bounds still route to the fast tier.
+pub const DEFAULT_CDS_SPLICE_BUFFER: i64 = 25;
+
+/// Default flank (bp) added on each side of the gene body for the
+/// `tiered-genebody` hot set (regulatory buffer — DESIGN.md: "+10kb buffer").
+pub const DEFAULT_GENEBODY_BUFFER: i64 = 10_000;
+
+fn default_cds_splice_buffer() -> i64 {
+    DEFAULT_CDS_SPLICE_BUFFER
+}
+
+fn default_genebody_buffer() -> i64 {
+    DEFAULT_GENEBODY_BUFFER
+}
+
+/// Which gene-derived intervals make up the "hot" set served by the tiered
+/// router's fast tier. Selects between the two benchmark sub-arms.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TierRouting {
+    /// `tiered-cds`: hot set = CDS exons + splice buffer (~1.5% of genome).
+    /// Gene-view region queries span introns and fall to the cold tier.
+    #[default]
+    Cds,
+    /// `tiered-genebody`: hot set = full gene bodies + flank (~45% of genome).
+    /// Gene-view region queries stay hot.
+    Genebody,
+}
+
 /// An external link shown in the navbar or on pages.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ExternalLink {
@@ -126,9 +161,44 @@ pub enum BackendConfig {
         #[serde(default = "default_es_genes_index")]
         genes_index: String,
     },
+    /// Region-aware tiered router (benchmark arms `tiered-cds` / `tiered-genebody`).
+    ///
+    /// At startup the gene intervals (CDS exons or gene bodies, per `routing`)
+    /// are loaded from `genes_path` into an in-memory interval tree. A region
+    /// query 100%-contained in the hot set is served by `fast`; any query that
+    /// spans a cold gap is routed in its entirety to `fallback` (no API-layer
+    /// scatter/gather).
+    ///
+    /// ```toml
+    /// [backend]
+    /// type = "tiered"
+    /// routing = "cds"          # or "genebody"
+    ///
+    /// [backend.fast]
+    /// type = "postgres"
+    /// database_url = "postgres://localhost/gnomad"
+    ///
+    /// [backend.fallback]
+    /// type = "hail"
+    /// variants_path = "gs://..."
+    /// genes_path = "gs://..."
+    /// ```
     Tiered {
         fast: Box<BackendConfig>,
         fallback: Box<BackendConfig>,
+        /// Selects the `tiered-cds` vs `tiered-genebody` hot set. Default: `cds`.
+        #[serde(default)]
+        routing: TierRouting,
+        /// gnomAD genes Hail table the hot intervals are loaded from. Defaults
+        /// to the public gnomAD genes table (same as the Hail backend).
+        #[serde(default = "default_tier_genes_path")]
+        genes_path: String,
+        /// Buffer (bp) on each side of every CDS exon (only used for `cds`).
+        #[serde(default = "default_cds_splice_buffer")]
+        cds_splice_buffer: i64,
+        /// Buffer (bp) on each side of the gene body (only used for `genebody`).
+        #[serde(default = "default_genebody_buffer")]
+        genebody_buffer: i64,
     },
 }
 

@@ -67,6 +67,20 @@ static CONSTRAINT_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
     ]))
 });
 
+/// Projection for tier-router interval loading — gene bounds *plus* the `exons`
+/// array (needed for CDS routing) while still skipping the heavy `transcripts`
+/// list. See `load_genes_geometry`.
+static GENE_INTERVAL_PROJECTION: LazyLock<Arc<ProjectionTree>> = LazyLock::new(|| {
+    Arc::new(ProjectionTree::from_fields(&[
+        FieldPath::parse("gene_id").unwrap(),
+        FieldPath::parse("chrom").unwrap(),
+        FieldPath::parse("start").unwrap(),
+        FieldPath::parse("stop").unwrap(),
+        FieldPath::parse("interval").unwrap(),
+        FieldPath::parse("exons").unwrap(),
+    ]))
+});
+
 use super::VariantBackend;
 use crate::models::api::{
     Exon, Gene, GeneConstraint, SearchResult, Transcript, TranscriptConsequence, Variant,
@@ -253,6 +267,31 @@ impl HailBackend {
 // ============================================================================
 // Gene extraction from gnomAD genes table
 // ============================================================================
+
+/// Load gene geometry (chrom, bounds, and `exons` incl. CDS feature types) from
+/// a gnomAD genes Hail table, for the tiered router's hot-interval tree.
+///
+/// Reuses [`extract_gene`] but with [`GENE_INTERVAL_PROJECTION`], which pulls the
+/// `exons` array (CDS routing needs per-exon feature types) while skipping the
+/// heavy `transcripts` list. Runs a single projected full-table scan; intended
+/// to be called once at startup (see `build_backend` for the Tiered arm).
+pub fn load_genes_geometry(genes_path: &str) -> Result<Vec<Gene>> {
+    let engine = QueryEngine::open_path_cached(genes_path, Some(CacheOptions::default()))
+        .context("Failed to open genes table for tier-router interval loading")?;
+    let projection = Arc::clone(&GENE_INTERVAL_PROJECTION);
+    let mut genes = Vec::new();
+    for row_result in engine.query_iter_with_projection(&[], None, Some(projection))? {
+        let row = match row_result {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if let Some(gene) = extract_gene(&row) {
+            genes.push(gene);
+        }
+    }
+    info!("Loaded geometry for {} genes (tier routing)", genes.len());
+    Ok(genes)
+}
 
 fn extract_gene(row: &EncodedValue) -> Option<Gene> {
     let gene_id = get_field(row, "gene_id").and_then(as_string)?;

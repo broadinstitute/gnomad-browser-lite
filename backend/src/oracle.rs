@@ -349,4 +349,64 @@ mod tests {
         let duck = DuckDbBackend::new(Path::new(&duck_dir))?;
         assert_equivalent(&es, &duck).await
     }
+
+    /// Tier-router correctness oracle for both `tiered-cds` and `tiered-genebody`.
+    ///
+    /// The router invariant is that **whichever tier answers, the result equals
+    /// the cold reference** — geometric routing and whole-region cold fallback
+    /// must never add, drop, or reorder variants. We assert that by building a
+    /// `TieredBackend` whose fast and cold tiers are the *same* full DuckDB
+    /// subset, then comparing it to the plain DuckDB reference across the golden
+    /// set, for each routing mode. (In production the fast tier is a CDS/genebody
+    /// subset in Postgres; here equal tiers isolate the router itself.) The hot
+    /// tree is built from a real genes table.
+    ///
+    /// Skips (passes) without infra. Run with:
+    ///
+    /// ```bash
+    /// ORACLE_DUCKDB_DIR=/path/to/parquet/dir \
+    /// ORACLE_GENES_PATH=gs://.../gnomad.genes...ht \
+    /// cargo test --package backend oracle_tiered_vs_reference -- --nocapture
+    /// ```
+    #[tokio::test]
+    async fn oracle_tiered_vs_reference() -> Result<()> {
+        use crate::backend::duckdb::DuckDbBackend;
+        use crate::backend::hail::load_genes_geometry;
+        use crate::backend::tiered::{HotIntervals, TieredBackend};
+        use crate::config::{
+            TierRouting, DEFAULT_CDS_SPLICE_BUFFER, DEFAULT_GENEBODY_BUFFER,
+        };
+        use std::path::Path;
+
+        let (Ok(duck_dir), Ok(genes_path)) = (
+            std::env::var("ORACLE_DUCKDB_DIR"),
+            std::env::var("ORACLE_GENES_PATH"),
+        ) else {
+            eprintln!(
+                "oracle_tiered_vs_reference: skipped (set ORACLE_DUCKDB_DIR and ORACLE_GENES_PATH to run)"
+            );
+            return Ok(());
+        };
+
+        let genes = load_genes_geometry(&genes_path)?;
+
+        for routing in [TierRouting::Cds, TierRouting::Genebody] {
+            let hot = HotIntervals::from_genes(
+                &genes,
+                routing,
+                DEFAULT_CDS_SPLICE_BUFFER,
+                DEFAULT_GENEBODY_BUFFER,
+            );
+            let tiered = TieredBackend {
+                fast: Box::new(DuckDbBackend::new(Path::new(&duck_dir))?),
+                fallback: Box::new(DuckDbBackend::new(Path::new(&duck_dir))?),
+                hot,
+            };
+            let reference = DuckDbBackend::new(Path::new(&duck_dir))?;
+            assert_equivalent(&tiered, &reference)
+                .await
+                .map_err(|e| anyhow::anyhow!("routing {routing:?}: {e}"))?;
+        }
+        Ok(())
+    }
 }

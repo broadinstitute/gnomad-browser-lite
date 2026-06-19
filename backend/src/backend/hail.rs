@@ -112,23 +112,37 @@ pub struct VepConfig {
 impl HailBackend {
     pub fn new(variants_path: &str, genes_path: &str, constraint_path: Option<&str>, vep: Option<VepConfig>) -> Result<Self> {
         let cache_opts = Some(CacheOptions::default());
+        #[cfg_attr(not(feature = "vep"), allow(unused_mut))]
         let mut variants_engine = QueryEngine::open_path_cached(variants_path, cache_opts.clone())
             .context("Failed to open variants table")?;
 
-        // Wrap with AnnotatingDataSource for on-the-fly VEP annotation
+        // Wrap with AnnotatingDataSource for on-the-fly VEP annotation. The benchmark
+        // serves precomputed consequences, so the default build omits the `vep`
+        // feature (and fastVEP); a VEP config is only honored when built with it.
         if let Some(vep_cfg) = vep {
-            use genohype_core::datasource::annotating::VepInitOptions;
-            info!("Enabling on-the-fly VEP annotation (GFF3: {}, LOFTEE: enabled)", vep_cfg.gff3);
-            let options = VepInitOptions {
-                gff3: vep_cfg.gff3,
-                fasta: vep_cfg.fasta,
-                sa_dir: None,
-                distance: 5000,
-                pick: false,
-                loftee: true,
-            };
-            variants_engine = variants_engine.with_vep(options)
-                .context("Failed to initialize VEP annotation wrapper")?;
+            #[cfg(feature = "vep")]
+            {
+                use genohype_core::datasource::annotating::VepInitOptions;
+                info!("Enabling on-the-fly VEP annotation (GFF3: {}, LOFTEE: enabled)", vep_cfg.gff3);
+                let options = VepInitOptions {
+                    gff3: vep_cfg.gff3,
+                    fasta: vep_cfg.fasta,
+                    sa_dir: None,
+                    distance: 5000,
+                    pick: false,
+                    loftee: true,
+                };
+                variants_engine = variants_engine.with_vep(options)
+                    .context("Failed to initialize VEP annotation wrapper")?;
+            }
+            #[cfg(not(feature = "vep"))]
+            {
+                let _ = vep_cfg;
+                anyhow::bail!(
+                    "VEP annotation was requested (vep_gff3 set) but this binary was built \
+                     without the `vep` feature; rebuild with --features vep"
+                );
+            }
         }
 
         let genes_engine = QueryEngine::open_path_cached(genes_path, cache_opts)

@@ -1,6 +1,7 @@
 pub mod clickhouse;
 pub mod duckdb;
 pub mod elasticsearch;
+pub mod gcs_cache;
 pub mod hail;
 pub mod json_extract;
 pub mod postgres;

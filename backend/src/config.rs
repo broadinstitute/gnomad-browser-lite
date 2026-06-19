@@ -48,6 +48,24 @@ pub enum TierRouting {
     Genebody,
 }
 
+/// How the materialized-cache backend (`gcs-cache`) stores and serves the
+/// precomputed gene-view variant blobs. Selects between the three benchmark
+/// sub-arms.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheMode {
+    /// `gcs-cache-mem`: every gene-view blob is loaded into RAM at startup.
+    /// Fastest hot path; RAM sized to the whole cache (~tens of GB).
+    #[default]
+    Mem,
+    /// `gcs-cache-file`: blobs live as `{gene_id}.json` objects on local-SSD and
+    /// are read per hit. No RAM pressure, CDN-able.
+    File,
+    /// `gcs-cache-lazy`: warm-on-demand `moka` cache over the fallback — first
+    /// hit for a gene is cold (→ fallback), the rest warm.
+    Lazy,
+}
+
 /// An external link shown in the navbar or on pages.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ExternalLink {
@@ -199,6 +217,43 @@ pub enum BackendConfig {
         /// Buffer (bp) on each side of the gene body (only used for `genebody`).
         #[serde(default = "default_genebody_buffer")]
         genebody_buffer: i64,
+    },
+    /// Materialized-cache backend (benchmark arms `gcs-cache-mem` /
+    /// `gcs-cache-file` / `gcs-cache-lazy`) — "the database is a cache of
+    /// responses".
+    ///
+    /// Wraps a `fallback` backend (conventionally `hail`). At startup the gnomAD
+    /// genes table at `genes_path` is scanned into a `(chrom, start, stop) →
+    /// gene_id` reverse index. A `get_variants` call whose coordinates *exactly*
+    /// match a gene boundary is a gene-view: it is served from the precomputed
+    /// cache (RAM / local-SSD file / lazy `moka`, per `mode`). Everything else —
+    /// ad-hoc regions, search, variant-by-id, and gene metadata — falls through
+    /// to `fallback` (DESIGN.md "Materialized-cache arm").
+    ///
+    /// ```toml
+    /// [backend]
+    /// type = "gcscache"
+    /// mode = "mem"                 # or "file" / "lazy"
+    /// cache_dir = "/mnt/ssd/cache" # dir of {gene_id}.json blobs (mem/file)
+    ///
+    /// [backend.fallback]
+    /// type = "hail"
+    /// variants_path = "gs://..."
+    /// genes_path = "gs://..."
+    /// ```
+    GcsCache {
+        fallback: Box<BackendConfig>,
+        /// Selects `gcs-cache-mem` / `-file` / `-lazy`. Default: `mem`.
+        #[serde(default)]
+        mode: CacheMode,
+        /// Directory of precomputed `{gene_id}.json` gene-view blobs. Required
+        /// for `mem`/`file`; ignored for `lazy` (which warms from the fallback).
+        #[serde(default)]
+        cache_dir: Option<String>,
+        /// gnomAD genes Hail table the gene-boundary reverse index is loaded
+        /// from. Defaults to the public gnomAD genes table.
+        #[serde(default = "default_tier_genes_path")]
+        genes_path: String,
     },
 }
 

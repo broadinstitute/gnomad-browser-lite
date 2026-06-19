@@ -28,6 +28,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::backend::clickhouse::ClickHouseBackend;
 use crate::backend::duckdb::DuckDbBackend;
 use crate::backend::elasticsearch::ElasticsearchBackend;
+use crate::backend::gcs_cache::GcsCacheBackend;
 use crate::backend::hail::HailBackend;
 use crate::backend::postgres::PostgresBackend;
 use crate::backend::tiered::TieredBackend;
@@ -162,6 +163,30 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>
                 }),
                 source_info,
             ))
+        }
+        BackendConfig::GcsCache {
+            fallback,
+            mode,
+            cache_dir,
+            genes_path,
+        } => {
+            tracing::info!("Initializing GcsCacheBackend (mode={:?})", mode);
+            let (fallback_backend, source_info) = build_backend(fallback)?;
+
+            // Load gene geometry for the gene-boundary reverse index. The
+            // genohype GCS reader uses its own blocking runtime, so open it off
+            // the tokio runtime thread (same pattern as the Hail/Tiered arms).
+            tracing::info!("Loading gene boundaries from {}", genes_path);
+            let gp = genes_path.clone();
+            let genes = std::thread::spawn(move || {
+                crate::backend::hail::load_genes_geometry(&gp)
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("Gene-boundary loading thread panicked"))??;
+
+            let backend =
+                GcsCacheBackend::new(fallback_backend, &genes, *mode, cache_dir.clone())?;
+            Ok((Box::new(backend), source_info))
         }
     }
 }

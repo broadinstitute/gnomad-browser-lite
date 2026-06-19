@@ -350,6 +350,48 @@ mod tests {
         assert_equivalent(&es, &duck).await
     }
 
+    /// Equivalence check for the materialized-cache arm (`gcs-cache`) against its
+    /// own Hail fallback. Skips (passes) when unconfigured, so `cargo test` is
+    /// green without infra. The cache must hold the same answers Hail produces on
+    /// *cacheable* queries (gene-boundary region scans), and fall through to the
+    /// identical Hail path for everything else — so the SUT and reference are
+    /// result-identical across the whole golden set.
+    ///
+    /// Point `ORACLE_GCS_CACHE_DIR` at a directory of Phase-4 `{gene_id}.json`
+    /// blobs (mem mode); the Hail paths default to the public gnomAD tables:
+    ///
+    /// ```bash
+    /// ORACLE_GCS_CACHE_DIR=/mnt/ssd/cache \
+    /// cargo test --package backend oracle_gcs_cache_vs_hail -- --nocapture
+    /// ```
+    #[tokio::test]
+    async fn oracle_gcs_cache_vs_hail() -> Result<()> {
+        use crate::backend::gcs_cache::GcsCacheBackend;
+        use crate::backend::hail::{load_genes_geometry, HailBackend, DEFAULT_GENES_PATH, DEFAULT_VARIANTS_PATH};
+        use crate::config::CacheMode;
+
+        let Ok(cache_dir) = std::env::var("ORACLE_GCS_CACHE_DIR") else {
+            eprintln!("oracle_gcs_cache_vs_hail: skipped (set ORACLE_GCS_CACHE_DIR to run)");
+            return Ok(());
+        };
+        let variants_path =
+            std::env::var("ORACLE_HAIL_VARIANTS").unwrap_or_else(|_| DEFAULT_VARIANTS_PATH.into());
+        let genes_path =
+            std::env::var("ORACLE_HAIL_GENES").unwrap_or_else(|_| DEFAULT_GENES_PATH.into());
+
+        let reference = HailBackend::new(&variants_path, &genes_path, None, None)?;
+        let fallback = HailBackend::new(&variants_path, &genes_path, None, None)?;
+        let genes = load_genes_geometry(&genes_path)?;
+        let cache = GcsCacheBackend::new(
+            Box::new(fallback),
+            &genes,
+            CacheMode::Mem,
+            Some(cache_dir),
+        )?;
+
+        assert_equivalent(&cache, &reference).await
+    }
+
     /// Tier-router correctness oracle for both `tiered-cds` and `tiered-genebody`.
     ///
     /// The router invariant is that **whichever tier answers, the result equals

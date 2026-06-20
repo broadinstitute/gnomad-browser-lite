@@ -1,8 +1,15 @@
 //! ClickHouse backend for production-scale gnomAD querying.
 //!
 //! Queries a ClickHouse instance over HTTP using the `clickhouse` crate.
-//! Assumes the data has been loaded via `gbl load --target clickhouse` which
-//! uses the staging→transform ETL pattern to flatten gnomAD's nested schema.
+//!
+//! The `variants` table carries the **native nested** gnomAD schema that
+//! `genohype export clickhouse` writes directly (locus `Tuple(contig, position)`,
+//! `exome`/`genome` structs, `transcript_consequences Array(Tuple(...))`) — the
+//! same nested layout the DuckDB arm reads. No flatten/ETL step is required:
+//! the nested columns are projected to the flat `api::Variant` shape **in SQL**
+//! (mirroring `duckdb.rs`), so every arm returns the identical response. The
+//! `genes` lookup table is the flat table produced by `genohype export
+//! genes-clickhouse` (gene_id, gencode_symbol, …, transcripts_json).
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -93,15 +100,36 @@ impl VariantBackend for ClickHouseBackend {
         end: i64,
         _force_fallback: bool,
     ) -> Result<Vec<Variant>> {
+        // Project the native nested schema down to the flat `api::Variant`
+        // shape entirely in SQL (mirrors `duckdb.rs`). `locus` is a
+        // Tuple(contig, position); `exome`/`genome.freq.all` carry ac/an;
+        // `transcript_consequences[1]` is the lead consequence. `alleles`/`rsids`
+        // are Array(Nullable(String)) in storage — drop NULLs so they decode into
+        // the `Vec<String>` the row model expects.
         let rows = self
             .client
             .query(
-                "SELECT chrom, pos, variant_id, alleles, rsids, \
-                 ac, an, af, consequence, hgvsc, hgvsp, \
-                 gene_id, gene_symbol, transcript_id, lof \
+                "SELECT \
+                   locus.1 AS chrom, \
+                   locus.2 AS pos, \
+                   variant_id, \
+                   arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
+                   arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \
+                   toInt64(coalesce(exome.freq.`all`.ac, genome.freq.`all`.ac, 0)) AS ac, \
+                   toInt64(coalesce(exome.freq.`all`.an, genome.freq.`all`.an, 0)) AS an, \
+                   if(coalesce(exome.freq.`all`.an, genome.freq.`all`.an, 0) > 0, \
+                      toFloat64(coalesce(exome.freq.`all`.ac, genome.freq.`all`.ac, 0)) \
+                      / toFloat64(coalesce(exome.freq.`all`.an, genome.freq.`all`.an, 0)), 0.0) AS af, \
+                   transcript_consequences[1].major_consequence AS consequence, \
+                   transcript_consequences[1].hgvsc AS hgvsc, \
+                   transcript_consequences[1].hgvsp AS hgvsp, \
+                   transcript_consequences[1].gene_id AS gene_id, \
+                   transcript_consequences[1].gene_symbol AS gene_symbol, \
+                   transcript_consequences[1].transcript_id AS transcript_id, \
+                   transcript_consequences[1].lof AS lof \
                  FROM variants \
-                 WHERE chrom = ? AND pos >= ? AND pos <= ? \
-                 ORDER BY pos",
+                 WHERE locus.1 = ? AND locus.2 >= ? AND locus.2 <= ? \
+                 ORDER BY locus.2",
             )
             .bind(chrom)
             .bind(start)
@@ -117,13 +145,25 @@ impl VariantBackend for ClickHouseBackend {
         variant_id: &str,
         _force_fallback: bool,
     ) -> Result<Option<VariantDetails>> {
+        // Flatten locus/alleles like the list query; serialize the deeply nested
+        // structs to JSON strings with `toJSONString` so the row model can pass
+        // them through to the frontend (matches duckdb.rs's `to_json(...)`).
         let row = self
             .client
             .query(
-                "SELECT chrom, pos, variant_id, alleles, rsids, caid, \
-                 exome_json, genome_json, joint_json, \
-                 transcript_consequences_json, in_silico_predictors_json, \
-                 coverage_json \
+                "SELECT \
+                   locus.1 AS chrom, \
+                   locus.2 AS pos, \
+                   variant_id, \
+                   arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
+                   arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \
+                   caid, \
+                   toJSONString(exome) AS exome_json, \
+                   toJSONString(genome) AS genome_json, \
+                   toJSONString(joint) AS joint_json, \
+                   toJSONString(transcript_consequences) AS transcript_consequences_json, \
+                   toJSONString(in_silico_predictors) AS in_silico_predictors_json, \
+                   toJSONString(coverage) AS coverage_json \
                  FROM variants \
                  WHERE variant_id = ?",
             )

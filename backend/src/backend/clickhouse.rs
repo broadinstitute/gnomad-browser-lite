@@ -111,7 +111,7 @@ impl VariantBackend for ClickHouseBackend {
             .query(
                 "SELECT \
                    locus.1 AS chrom, \
-                   locus.2 AS pos, \
+                   toInt64(locus.2) AS pos, \
                    variant_id, \
                    arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
                    arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \
@@ -153,7 +153,7 @@ impl VariantBackend for ClickHouseBackend {
             .query(
                 "SELECT \
                    locus.1 AS chrom, \
-                   locus.2 AS pos, \
+                   toInt64(locus.2) AS pos, \
                    variant_id, \
                    arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
                    arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \

@@ -135,23 +135,50 @@ impl GcsCacheBackend {
                     anyhow::anyhow!("gcs-cache mode=mem requires `cache_dir`")
                 })?);
                 let mut blobs: HashMap<String, Arc<GeneVariantsResponse>> = HashMap::new();
-                let mut missing = 0usize;
-                for gene_id in gene_boundaries.values() {
-                    let path = blob_path(&dir, gene_id);
+                let mut skipped = 0usize;
+                // List the cache dir ONCE (one gcsfuse LIST) and load only the blobs
+                // that actually exist. Probing per indexed gene instead means a partial
+                // cache (e.g. 15 of 61k genes) costs ~61k gcsfuse negative lookups at
+                // boot (~4 min) and blows the Cloud Run startup probe. Requires the
+                // gcsfuse mount to enumerate implicit dirs (Cloud Run default: on).
+                let entries = std::fs::read_dir(&dir)
+                    .with_context(|| format!("gcs-cache mode=mem: cannot read cache_dir {dir:?}"))?;
+                for entry in entries {
+                    let path = match entry {
+                        Ok(e) => e.path(),
+                        Err(e) => {
+                            warn!("gcs-cache: skipping unreadable dir entry: {e}");
+                            continue;
+                        }
+                    };
+                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let Some(gene_id) =
+                        path.file_stem().and_then(|s| s.to_str()).map(str::to_owned)
+                    else {
+                        continue;
+                    };
                     match std::fs::read(&path) {
                         Ok(bytes) => match parse_blob(&bytes) {
                             Ok(response) => {
-                                blobs.insert(gene_id.clone(), Arc::new(response));
+                                blobs.insert(gene_id, Arc::new(response));
                             }
-                            Err(e) => warn!("gcs-cache: skipping {:?}: {}", path, e),
+                            Err(e) => {
+                                warn!("gcs-cache: skipping {:?}: {}", path, e);
+                                skipped += 1;
+                            }
                         },
-                        Err(_) => missing += 1,
+                        Err(e) => {
+                            warn!("gcs-cache: skipping {:?}: {}", path, e);
+                            skipped += 1;
+                        }
                     }
                 }
                 info!(
-                    "gcs-cache: loaded {} gene-view blobs into RAM ({} not yet built)",
+                    "gcs-cache: loaded {} gene-view blobs into RAM ({} skipped)",
                     blobs.len(),
-                    missing
+                    skipped
                 );
                 CacheStore::Mem(blobs)
             }

@@ -103,9 +103,12 @@ fn build_backend(cfg: &BackendConfig) -> anyhow::Result<(Box<dyn VariantBackend>
             let backend = ClickHouseBackend::new(url, database);
             Ok((Box::new(backend), None))
         }
-        BackendConfig::Postgres { database_url } => {
-            tracing::info!("Initializing Postgres backend");
-            let backend = PostgresBackend::new(database_url)?;
+        BackendConfig::Postgres {
+            database_url,
+            query_mode,
+        } => {
+            tracing::info!("Initializing Postgres backend (query_mode={:?})", query_mode);
+            let backend = PostgresBackend::new_with_mode(database_url, (*query_mode).into())?;
             Ok((Box::new(backend), None))
         }
         BackendConfig::Elasticsearch {

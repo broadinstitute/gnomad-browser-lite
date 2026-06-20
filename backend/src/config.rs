@@ -66,6 +66,27 @@ pub enum CacheMode {
     Lazy,
 }
 
+/// How the Postgres backend projects browser-list scalars. Selects the
+/// `postgres` vs `postgres-typed` benchmark sub-arms (see `BackendConfig::Postgres`).
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PgQueryMode {
+    /// `postgres`: extract scalars in SQL from the wide JSONB `data` document.
+    #[default]
+    Jsonb,
+    /// `postgres-typed`: read pre-materialized STORED generated columns.
+    Typed,
+}
+
+impl From<PgQueryMode> for crate::backend::postgres::PgQueryMode {
+    fn from(m: PgQueryMode) -> Self {
+        match m {
+            PgQueryMode::Jsonb => crate::backend::postgres::PgQueryMode::Jsonb,
+            PgQueryMode::Typed => crate::backend::postgres::PgQueryMode::Typed,
+        }
+    }
+}
+
 /// An external link shown in the navbar or on pages.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ExternalLink {
@@ -152,15 +173,29 @@ pub enum BackendConfig {
         url: String,
         database: String,
     },
-    /// Postgres JSONB wide-table backend (benchmark arm `postgres`).
+    /// Postgres JSONB wide-table backend (benchmark arms `postgres` /
+    /// `postgres-typed`).
+    ///
+    /// `query_mode` selects the list-query projection:
+    /// - `"jsonb"` (default) — `postgres` arm: storage is the wide JSONB `data`
+    ///   document; the browser-list scalars are extracted in SQL via JSONB path
+    ///   operators (the store still de-TOASTs the whole document, the honest
+    ///   document-store cost, but the API decodes typed columns — no `::text`
+    ///   round-trip + full reparse).
+    /// - `"typed"` — `postgres-typed` arm: the list scalars are read straight
+    ///   from STORED generated columns materialized at load time (zero JSONB
+    ///   extraction). The detail view still reads `data`.
     ///
     /// ```toml
     /// [backend]
     /// type = "postgres"
     /// database_url = "postgres://user:pass@localhost:5432/gnomad"
+    /// query_mode = "jsonb"   # or "typed"
     /// ```
     Postgres {
         database_url: String,
+        #[serde(default)]
+        query_mode: PgQueryMode,
     },
     /// Elasticsearch backend (benchmark arm `es`, the prod baseline).
     ///

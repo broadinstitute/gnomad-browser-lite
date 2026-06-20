@@ -234,6 +234,90 @@ mod tests {
     use super::*;
     use crate::models::api::Variant;
 
+    /// SMOKE-ONLY golden set. The standard `golden_queries()` target chr1
+    /// (PCSK9), chr21:5M and chr22 — none of which intersect the 15-gene smoke
+    /// subset (chr21:10.0M-10.8M, BAGE2 = ENSG00000187172). Against the smoke
+    /// data the standard set is *vacuous* (empty == empty), so these queries
+    /// exercise coordinates the smoke arms actually contain, giving a
+    /// non-vacuous PG/ES vs reference check. Not part of the stable contract.
+    fn smoke_golden_queries() -> Vec<OracleQuery> {
+        vec![
+            // BAGE2 gene metadata (real smoke gene).
+            OracleQuery::Gene { gene_id: "ENSG00000187172".to_string() },
+            // BAGE2 gene body region scan.
+            OracleQuery::Variants { chrom: "chr21".to_string(), start: 10_413_477, end: 10_516_431 },
+            // Dense interior window (~8.9k variants).
+            OracleQuery::Variants { chrom: "chr21".to_string(), start: 10_450_000, end: 10_460_000 },
+            // Narrow window (tight composite-index range).
+            OracleQuery::Variants { chrom: "chr21".to_string(), start: 10_450_000, end: 10_450_500 },
+            // Whole smoke footprint.
+            OracleQuery::Variants { chrom: "chr21".to_string(), start: 10_000_000, end: 10_900_000 },
+            // Real variant-by-id (note bare `21-` prefix as loaded).
+            OracleQuery::VariantDetail { variant_id: "21-10450001-T-C".to_string() },
+        ]
+    }
+
+    async fn assert_smoke_equivalent(a: &dyn VariantBackend, b: &dyn VariantBackend) -> Result<()> {
+        for query in smoke_golden_queries() {
+            // Echo per-query row counts so the check is visibly non-vacuous.
+            if let OracleQuery::Variants { chrom, start, end } = &query {
+                let na = a.get_variants(chrom, *start, *end, false).await?.len();
+                let nb = b.get_variants(chrom, *start, *end, false).await?.len();
+                eprintln!("SMOKE Variants({chrom}:{start}-{end}): a={na} b={nb}");
+            }
+            compare_query(a, b, &query).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oracle_smoke_postgres_vs_duckdb() -> Result<()> {
+        use crate::backend::duckdb::DuckDbBackend;
+        use crate::backend::postgres::PostgresBackend;
+        use std::path::Path;
+        let (Ok(pg_url), Ok(duck_dir)) =
+            (std::env::var("ORACLE_PG_URL"), std::env::var("ORACLE_DUCKDB_DIR")) else {
+            eprintln!("oracle_smoke_postgres_vs_duckdb: skipped");
+            return Ok(());
+        };
+        let pg = PostgresBackend::new(&pg_url)?;
+        let duck = DuckDbBackend::new(Path::new(&duck_dir))?;
+        assert_smoke_equivalent(&pg, &duck).await
+    }
+
+    #[tokio::test]
+    async fn oracle_smoke_elasticsearch_vs_duckdb() -> Result<()> {
+        use crate::backend::duckdb::DuckDbBackend;
+        use crate::backend::elasticsearch::{ElasticsearchBackend, DEFAULT_GENES_INDEX, DEFAULT_VARIANTS_INDEX};
+        use std::path::Path;
+        let (Ok(es_url), Ok(duck_dir)) =
+            (std::env::var("ORACLE_ES_URL"), std::env::var("ORACLE_DUCKDB_DIR")) else {
+            eprintln!("oracle_smoke_elasticsearch_vs_duckdb: skipped");
+            return Ok(());
+        };
+        let vi = std::env::var("ORACLE_ES_VARIANTS_INDEX").unwrap_or_else(|_| DEFAULT_VARIANTS_INDEX.to_string());
+        let gi = std::env::var("ORACLE_ES_GENES_INDEX").unwrap_or_else(|_| DEFAULT_GENES_INDEX.to_string());
+        let es = ElasticsearchBackend::new(&es_url, &vi, &gi)?;
+        let duck = DuckDbBackend::new(Path::new(&duck_dir))?;
+        assert_smoke_equivalent(&es, &duck).await
+    }
+
+    #[tokio::test]
+    async fn oracle_smoke_postgres_vs_elasticsearch() -> Result<()> {
+        use crate::backend::elasticsearch::{ElasticsearchBackend, DEFAULT_GENES_INDEX, DEFAULT_VARIANTS_INDEX};
+        use crate::backend::postgres::PostgresBackend;
+        let (Ok(pg_url), Ok(es_url)) =
+            (std::env::var("ORACLE_PG_URL"), std::env::var("ORACLE_ES_URL")) else {
+            eprintln!("oracle_smoke_postgres_vs_elasticsearch: skipped");
+            return Ok(());
+        };
+        let vi = std::env::var("ORACLE_ES_VARIANTS_INDEX").unwrap_or_else(|_| DEFAULT_VARIANTS_INDEX.to_string());
+        let gi = std::env::var("ORACLE_ES_GENES_INDEX").unwrap_or_else(|_| DEFAULT_GENES_INDEX.to_string());
+        let pg = PostgresBackend::new(&pg_url)?;
+        let es = ElasticsearchBackend::new(&es_url, &vi, &gi)?;
+        assert_smoke_equivalent(&pg, &es).await
+    }
+
     fn variant(chrom: &str, pos: i64, ac: i64, an: i64) -> Variant {
         let af = if an > 0 { ac as f64 / an as f64 } else { 0.0 };
         Variant {

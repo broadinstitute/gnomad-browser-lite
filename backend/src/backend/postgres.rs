@@ -46,39 +46,175 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::types::Json;
 use sqlx::PgPool;
+use sqlx::Row;
 use std::time::Instant;
 
-use super::json_extract::{variant_details_from_data, variant_from_data};
+use super::json_extract::variant_details_from_data;
 use super::{QueryStats, VariantBackend};
 use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
 use crate::models::db::DuckDbGeneRow;
 
+/// How `get_variants` projects the browser-list scalar fields out of the
+/// Postgres `variants` table. Selects the two benchmark sub-arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PgQueryMode {
+    /// `postgres` arm: storage is the wide JSONB `data` document, but the
+    /// browser-list scalars are extracted **in SQL** via JSONB path operators
+    /// (`data->'locus'->>'contig'`, `(data->'exome'->'freq'->'all'->>'ac')`,
+    /// `data->'transcript_consequences'->0->>'major_consequence'`, …). Postgres
+    /// still de-TOASTs the whole `data` document to evaluate the paths (the
+    /// honest document-store cost), but the API layer decodes typed scalar
+    /// columns directly — no `data::text` round-trip and no full
+    /// `serde_json::from_str` reparse of the ~25 KB blob in Rust.
+    #[default]
+    Jsonb,
+    /// `postgres-typed` arm: the browser-minimal scalar leaves were
+    /// materialized into STORED generated columns at load time, so the list
+    /// query reads typed columns directly with zero JSONB extraction — what a
+    /// competent Postgres deployment would do. The detail view still reads the
+    /// full `data` JSONB.
+    Typed,
+}
+
 /// Postgres backend querying the JSONB wide-table via `sqlx`.
 pub struct PostgresBackend {
     pool: PgPool,
+    query_mode: PgQueryMode,
+}
+
+/// A region-list row decoded straight from typed SQL columns.
+///
+/// Whether the scalars come from in-SQL JSONB extraction (`Jsonb` mode) or from
+/// pre-materialized generated columns (`Typed` mode), the row shape is identical,
+/// so a single decoder keeps both modes byte-for-byte equal to the DuckDB path.
+struct PgVariantRow {
+    variant_id: Option<String>,
+    contig: Option<String>,
+    pos: Option<i64>,
+    alleles: Json<Vec<String>>,
+    rsids: Option<Json<Vec<String>>>,
+    ac: Option<i64>,
+    an: Option<i64>,
+    consequence: Option<String>,
+    hgvsc: Option<String>,
+    hgvsp: Option<String>,
+    gene_id: Option<String>,
+    gene_symbol: Option<String>,
+    transcript_id: Option<String>,
+    lof: Option<String>,
+}
+
+impl PgVariantRow {
+    /// Map to `api::Variant`, mirroring `json_extract::variant_from_data` exactly
+    /// (same coalesce/AF math, same null handling) so the equivalence oracle
+    /// stays green.
+    fn into_api(self) -> Result<Variant> {
+        let chrom = self.contig.context("variant row missing locus.contig")?;
+        let pos = self.pos.context("variant row missing locus.position")?;
+        let ac = self.ac.unwrap_or(0);
+        let an = self.an.unwrap_or(0);
+        let af = if an > 0 { ac as f64 / an as f64 } else { 0.0 };
+        Ok(Variant {
+            variant_id: self.variant_id,
+            pos,
+            chrom,
+            alleles: self.alleles.0,
+            rsids: self.rsids.map(|r| r.0),
+            consequence: self.consequence,
+            hgvsc: self.hgvsc,
+            hgvsp: self.hgvsp,
+            gene_id: self.gene_id,
+            gene_symbol: self.gene_symbol,
+            transcript_id: self.transcript_id,
+            lof: self.lof,
+            ac,
+            an,
+            af,
+            allele_freq: af,
+        })
+    }
 }
 
 impl PostgresBackend {
-    /// Create a new Postgres backend.
+    /// Create a new Postgres backend (default `Jsonb` query mode).
     ///
     /// Uses `connect_lazy` so construction is synchronous (matching the other
     /// backends' `new`) — the pool establishes connections on first query.
     /// `database_url` is a standard libpq URL, e.g.
     /// `postgres://user:pass@localhost:5432/gnomad`.
     pub fn new(database_url: &str) -> Result<Self> {
+        Self::new_with_mode(database_url, PgQueryMode::Jsonb)
+    }
+
+    /// Create a new Postgres backend with an explicit list-query projection mode.
+    pub fn new_with_mode(database_url: &str, query_mode: PgQueryMode) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(16)
             .connect_lazy(database_url)
             .context("Failed to create Postgres connection pool")?;
-        Ok(Self { pool })
+        Ok(Self { pool, query_mode })
+    }
+
+    /// SELECT-list for the region query, per projection mode.
+    ///
+    /// Both modes return the *same* 14 columns in the same order/types, so the
+    /// row decoder (`PgVariantRow`) is shared. `Jsonb` extracts the leaves from
+    /// the `data` document with JSONB path operators (mirroring the json paths in
+    /// `json_extract.rs`); `Typed` reads the pre-materialized generated columns.
+    fn region_select_list(&self) -> &'static str {
+        match self.query_mode {
+            // NOTE: AC/AN COALESCE exome→genome exactly like
+            // `json_extract::coalesce_freq` / duckdb's COALESCE. The first
+            // transcript consequence (`->0`, the JSON array's element 0 = duckdb
+            // `transcript_consequences[1]`) supplies the summary scalars.
+            PgQueryMode::Jsonb => {
+                "variant_id, \
+                 data->'locus'->>'contig' AS contig, \
+                 (data->'locus'->>'position')::bigint AS pos, \
+                 COALESCE(data->'alleles', '[]'::jsonb) AS alleles, \
+                 NULLIF(data->'rsids', 'null'::jsonb) AS rsids, \
+                 COALESCE((data->'exome'->'freq'->'all'->>'ac')::bigint, \
+                          (data->'genome'->'freq'->'all'->>'ac')::bigint) AS ac, \
+                 COALESCE((data->'exome'->'freq'->'all'->>'an')::bigint, \
+                          (data->'genome'->'freq'->'all'->>'an')::bigint) AS an, \
+                 data->'transcript_consequences'->0->>'major_consequence' AS consequence, \
+                 data->'transcript_consequences'->0->>'hgvsc' AS hgvsc, \
+                 data->'transcript_consequences'->0->>'hgvsp' AS hgvsp, \
+                 data->'transcript_consequences'->0->>'gene_id' AS gene_id, \
+                 data->'transcript_consequences'->0->>'gene_symbol' AS gene_symbol, \
+                 data->'transcript_consequences'->0->>'transcript_id' AS transcript_id, \
+                 data->'transcript_consequences'->0->>'lof' AS lof"
+            }
+            // Typed: read the materialized generated columns directly (no JSONB
+            // touch at all). `t_alleles`/`t_rsids` are jsonb generated columns so
+            // the decoder's `Json<Vec<String>>` binding is unchanged.
+            PgQueryMode::Typed => {
+                "variant_id, \
+                 t_contig AS contig, \
+                 t_pos::bigint AS pos, \
+                 COALESCE(t_alleles, '[]'::jsonb) AS alleles, \
+                 t_rsids AS rsids, \
+                 t_ac AS ac, \
+                 t_an AS an, \
+                 t_consequence AS consequence, \
+                 t_hgvsc AS hgvsc, \
+                 t_hgvsp AS hgvsp, \
+                 t_gene_id AS gene_id, \
+                 t_gene_symbol AS gene_symbol, \
+                 t_transcript_id AS transcript_id, \
+                 t_lof AS lof"
+            }
+        }
     }
 
     /// Region query returning the variants plus split timing.
     ///
-    /// `db_query_ms` covers query execution + row transfer (the JSONB is cast to
-    /// text in the DB, so de-TOAST cost is attributed to the database); the
-    /// `deserialize_ms` covers parsing + mapping into `api::Variant`.
+    /// `db_query_ms` covers query execution + row transfer (the JSONB document is
+    /// de-TOASTed in the DB to evaluate the scalar projections, so that cost is
+    /// honestly attributed to the database); `deserialize_ms` covers decoding the
+    /// already-typed sqlx columns into `api::Variant` — no full-blob reparse.
     async fn region_variants_timed(
         &self,
         chrom: &str,
@@ -90,27 +226,43 @@ impl PostgresBackend {
         let start = clamp_pos(start);
         let end = clamp_pos(end);
 
-        let t_db = Instant::now();
-        let rows: Vec<(Option<String>, String)> = sqlx::query_as(
-            "SELECT variant_id, data::text \
-             FROM variants \
+        let sql = format!(
+            "SELECT {} FROM variants \
              WHERE contig = $1 AND pos >= $2 AND pos <= $3 \
              ORDER BY pos",
-        )
-        .bind(chrom)
-        .bind(start)
-        .bind(end)
-        .fetch_all(&self.pool)
-        .await
-        .context("Postgres region query failed")?;
+            self.region_select_list()
+        );
+
+        let t_db = Instant::now();
+        let rows = sqlx::query(&sql)
+            .bind(chrom)
+            .bind(start)
+            .bind(end)
+            .fetch_all(&self.pool)
+            .await
+            .context("Postgres region query failed")?;
         let db_query_ms = elapsed_ms(t_db);
 
         let t_de = Instant::now();
         let mut variants = Vec::with_capacity(rows.len());
-        for (variant_id, data_text) in rows {
-            let data: Value =
-                serde_json::from_str(&data_text).context("Failed to parse variant JSONB")?;
-            variants.push(variant_from_data(variant_id, &data)?);
+        for row in rows {
+            let pg_row = PgVariantRow {
+                variant_id: row.try_get("variant_id")?,
+                contig: row.try_get("contig")?,
+                pos: row.try_get("pos")?,
+                alleles: row.try_get("alleles")?,
+                rsids: row.try_get("rsids")?,
+                ac: row.try_get("ac")?,
+                an: row.try_get("an")?,
+                consequence: row.try_get("consequence")?,
+                hgvsc: row.try_get("hgvsc")?,
+                hgvsp: row.try_get("hgvsp")?,
+                gene_id: row.try_get("gene_id")?,
+                gene_symbol: row.try_get("gene_symbol")?,
+                transcript_id: row.try_get("transcript_id")?,
+                lof: row.try_get("lof")?,
+            };
+            variants.push(pg_row.into_api()?);
         }
         let deserialize_ms = elapsed_ms(t_de);
 
@@ -124,13 +276,19 @@ impl PostgresBackend {
     }
 
     /// Variant-by-id detail lookup returning the detail plus split timing.
+    ///
+    /// The detail view reads the full `data` JSONB in both modes (the nested
+    /// exome/genome/joint/coverage subtrees are passed through wholesale), but we
+    /// fetch the document as native `jsonb` and let sqlx hand us a parsed
+    /// `serde_json::Value` rather than casting to `::text` and reparsing the blob
+    /// ourselves.
     async fn point_variant_detail_timed(
         &self,
         variant_id: &str,
     ) -> Result<(Option<VariantDetails>, QueryStats)> {
         let t_db = Instant::now();
-        let row: Option<(Option<String>, String)> = sqlx::query_as(
-            "SELECT variant_id, data::text FROM variants WHERE variant_id = $1",
+        let row: Option<(Option<String>, Json<Value>)> = sqlx::query_as(
+            "SELECT variant_id, data FROM variants WHERE variant_id = $1",
         )
         .bind(variant_id)
         .fetch_optional(&self.pool)
@@ -140,11 +298,7 @@ impl PostgresBackend {
 
         let t_de = Instant::now();
         let detail = match row {
-            Some((vid, data_text)) => {
-                let data: Value = serde_json::from_str(&data_text)
-                    .context("Failed to parse variant JSONB")?;
-                Some(variant_details_from_data(vid, &data)?)
-            }
+            Some((vid, data)) => Some(variant_details_from_data(vid, &data.0)?),
             None => None,
         };
         let deserialize_ms = elapsed_ms(t_de);

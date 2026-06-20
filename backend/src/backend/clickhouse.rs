@@ -14,10 +14,15 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use clickhouse::Client;
+use std::time::Instant;
 
-use super::VariantBackend;
+use super::{QueryStats, VariantBackend};
 use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
 use crate::models::clickhouse::{ChGeneRow, ChSearchRow, ChVariantDetailRow, ChVariantRow};
+
+fn elapsed_ms(t: Instant) -> f64 {
+    t.elapsed().as_secs_f64() * 1000.0
+}
 
 /// ClickHouse backend querying flattened gnomAD tables.
 pub struct ClickHouseBackend {
@@ -98,14 +103,32 @@ impl VariantBackend for ClickHouseBackend {
         chrom: &str,
         start: i64,
         end: i64,
-        _force_fallback: bool,
+        force_fallback: bool,
     ) -> Result<Vec<Variant>> {
+        let (variants, _stats) = self
+            .get_variants_timed(chrom, start, end, force_fallback)
+            .await?;
+        Ok(variants)
+    }
+
+    /// Benchmarked region path with split timing. The `clickhouse` crate fuses
+    /// network fetch + RowBinary decode in `fetch_all`, so that whole cost is
+    /// attributed to `db_query_ms` (DB execution + row transfer + native decode);
+    /// `deserialize_ms` covers the `ChVariantRow -> api::Variant` mapping.
+    async fn get_variants_timed(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+        _force_fallback: bool,
+    ) -> Result<(Vec<Variant>, QueryStats)> {
         // Project the native nested schema down to the flat `api::Variant`
         // shape entirely in SQL (mirrors `duckdb.rs`). `locus` is a
         // Tuple(contig, position); `exome`/`genome.freq.all` carry ac/an;
         // `transcript_consequences[1]` is the lead consequence. `alleles`/`rsids`
         // are Array(Nullable(String)) in storage — drop NULLs so they decode into
         // the `Vec<String>` the row model expects.
+        let t_db = Instant::now();
         let rows = self
             .client
             .query(
@@ -136,18 +159,46 @@ impl VariantBackend for ClickHouseBackend {
             .bind(end)
             .fetch_all::<ChVariantRow>()
             .await?;
+        let db_query_ms = elapsed_ms(t_db);
 
-        Ok(rows.into_iter().map(|r| r.to_api()).collect())
+        let t_de = Instant::now();
+        let variants: Vec<Variant> = rows.into_iter().map(|r| r.to_api()).collect();
+        let deserialize_ms = elapsed_ms(t_de);
+
+        Ok((
+            variants,
+            QueryStats {
+                db_query_ms,
+                deserialize_ms,
+            },
+        ))
     }
 
     async fn get_variant_detail(
         &self,
         variant_id: &str,
-        _force_fallback: bool,
+        force_fallback: bool,
     ) -> Result<Option<VariantDetails>> {
+        let (detail, _stats) = self
+            .get_variant_detail_timed(variant_id, force_fallback)
+            .await?;
+        Ok(detail)
+    }
+
+    /// Variant-by-id detail with split timing. `db_query_ms` is the fused
+    /// fetch+decode; `deserialize_ms` covers the JSON-string -> nested
+    /// `api::VariantDetails` mapping in `ChVariantDetailRow::to_api`.
+    async fn get_variant_detail_timed(
+        &self,
+        variant_id: &str,
+        _force_fallback: bool,
+    ) -> Result<(Option<VariantDetails>, QueryStats)> {
         // Flatten locus/alleles like the list query; serialize the deeply nested
         // structs to JSON strings with `toJSONString` so the row model can pass
         // them through to the frontend (matches duckdb.rs's `to_json(...)`).
+        // Wrap in `toNullable` so the non-nullable `String` from `toJSONString`
+        // matches the row model's `Option<String>` RowBinary decode.
+        let t_db = Instant::now();
         let row = self
             .client
             .query(
@@ -158,22 +209,33 @@ impl VariantBackend for ClickHouseBackend {
                    arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
                    arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \
                    caid, \
-                   toJSONString(exome) AS exome_json, \
-                   toJSONString(genome) AS genome_json, \
-                   toJSONString(joint) AS joint_json, \
-                   toJSONString(transcript_consequences) AS transcript_consequences_json, \
-                   toJSONString(in_silico_predictors) AS in_silico_predictors_json, \
-                   toJSONString(coverage) AS coverage_json \
+                   toNullable(toJSONString(exome)) AS exome_json, \
+                   toNullable(toJSONString(genome)) AS genome_json, \
+                   toNullable(toJSONString(joint)) AS joint_json, \
+                   toNullable(toJSONString(transcript_consequences)) AS transcript_consequences_json, \
+                   toNullable(toJSONString(in_silico_predictors)) AS in_silico_predictors_json, \
+                   toNullable(toJSONString(coverage)) AS coverage_json \
                  FROM variants \
                  WHERE variant_id = ?",
             )
             .bind(variant_id)
             .fetch_optional::<ChVariantDetailRow>()
             .await?;
+        let db_query_ms = elapsed_ms(t_db);
 
-        match row {
-            Some(r) => Ok(Some(r.to_api()?)),
-            None => Ok(None),
-        }
+        let t_de = Instant::now();
+        let detail = match row {
+            Some(r) => Some(r.to_api()?),
+            None => None,
+        };
+        let deserialize_ms = elapsed_ms(t_de);
+
+        Ok((
+            detail,
+            QueryStats {
+                db_query_ms,
+                deserialize_ms,
+            },
+        ))
     }
 }

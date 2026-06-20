@@ -152,8 +152,20 @@ impl ElasticsearchBackend {
             "_source": region_source_fields()
         });
 
-        // --- DB work: initial search + scroll pages (fetchAllSearchResults) ---
-        let t_db = Instant::now();
+        // --- DB work + per-page deserialize (fetchAllSearchResults) ---
+        //
+        // Memory-critical: prod genes can have 75k+ variants. Accumulating every
+        // raw `_source` hit as `serde_json::Value` and *then* mapping would hold
+        // hundreds of MB (multiplied several-fold by serde's in-memory blowup) all
+        // at once -> Cloud Run OOM. Instead we map each scroll page to compact
+        // `api::Variant` immediately and drop the heavy raw page before fetching the
+        // next, so peak memory is ~one page (10k hits) of raw JSON, not all of it.
+        //
+        // Split timing is preserved: `deserialize_ms` sums the per-page map time and
+        // `db_query_ms` is the remaining round-trip/scroll time (total minus deser).
+        let t_total = Instant::now();
+        let mut deserialize_ms: f64 = 0.0;
+
         let first = self
             .client
             .search(SearchParts::Index(&[&self.variants_index]))
@@ -163,7 +175,7 @@ impl ElasticsearchBackend {
             .send()
             .await
             .context("Elasticsearch region search failed")?;
-        let first_body: Value = first
+        let mut first_body: Value = first
             .json()
             .await
             .context("Failed to read Elasticsearch region response")?;
@@ -172,10 +184,21 @@ impl ElasticsearchBackend {
             .as_i64()
             .unwrap_or(0);
         let mut scroll_id = first_body["_scroll_id"].as_str().map(str::to_string);
-        let mut raw_hits: Vec<Value> = collect_hits(&first_body);
+
+        let mut variants: Vec<Variant> = Vec::with_capacity(total.max(0) as usize);
+
+        // Map the first page, then let its raw `Value` array drop.
+        {
+            let page = take_hits(&mut first_body);
+            let t_de = Instant::now();
+            for hit in &page {
+                variants.push(variant_from_data(None, hit_value(hit)?)?);
+            }
+            deserialize_ms += elapsed_ms(t_de);
+        }
 
         // Page through with the scroll API until we've seen `total` hits.
-        while (raw_hits.len() as i64) < total {
+        while (variants.len() as i64) < total {
             let Some(sid) = scroll_id.clone() else { break };
             let resp = self
                 .client
@@ -184,16 +207,21 @@ impl ElasticsearchBackend {
                 .send()
                 .await
                 .context("Elasticsearch scroll failed")?;
-            let body: Value = resp
+            let mut body: Value = resp
                 .json()
                 .await
                 .context("Failed to read Elasticsearch scroll response")?;
-            let page = collect_hits(&body);
             scroll_id = body["_scroll_id"].as_str().map(str::to_string);
+            let page = take_hits(&mut body);
             if page.is_empty() {
                 break;
             }
-            raw_hits.extend(page);
+            // Map this page immediately; `page` (raw hits) drops at the loop end.
+            let t_de = Instant::now();
+            for hit in &page {
+                variants.push(variant_from_data(None, hit_value(hit)?)?);
+            }
+            deserialize_ms += elapsed_ms(t_de);
         }
 
         // Free the scroll context (matches prod's clearScroll); best-effort.
@@ -205,16 +233,10 @@ impl ElasticsearchBackend {
                 .send()
                 .await;
         }
-        let db_query_ms = elapsed_ms(t_db);
 
-        // --- Deserialize: each hit's `_source.value` → api::Variant ---
-        let t_de = Instant::now();
-        let mut variants = Vec::with_capacity(raw_hits.len());
-        for hit in &raw_hits {
-            let value = hit_value(hit)?;
-            variants.push(variant_from_data(None, value)?);
-        }
-        let deserialize_ms = elapsed_ms(t_de);
+        // db_query_ms = total elapsed minus the time spent mapping pages, so the
+        // route's db-vs-deserialize split stays meaningful even though we interleave.
+        let db_query_ms = (elapsed_ms(t_total) - deserialize_ms).max(0.0);
 
         Ok((
             variants,
@@ -246,14 +268,14 @@ impl ElasticsearchBackend {
             .send()
             .await
             .context("Elasticsearch variant-detail search failed")?;
-        let body: Value = resp
+        let mut body: Value = resp
             .json()
             .await
             .context("Failed to read Elasticsearch variant-detail response")?;
         let db_query_ms = elapsed_ms(t_db);
 
         let t_de = Instant::now();
-        let detail = match collect_hits(&body).first() {
+        let detail = match take_hits(&mut body).first() {
             Some(hit) => Some(variant_details_from_data(None, hit_value(hit)?)?),
             None => None,
         };
@@ -278,12 +300,12 @@ impl ElasticsearchBackend {
             .send()
             .await
             .context("Elasticsearch gene search failed")?;
-        let body: Value = resp
+        let mut body: Value = resp
             .json()
             .await
             .context("Failed to read Elasticsearch gene response")?;
 
-        match collect_hits(&body).first() {
+        match take_hits(&mut body).first() {
             Some(hit) => Ok(Some(gene_from_value(hit_value(hit)?)?)),
             None => Ok(None),
         }
@@ -317,13 +339,13 @@ impl VariantBackend for ElasticsearchBackend {
             .send()
             .await
             .context("Elasticsearch gene-search failed")?;
-        let body: Value = resp
+        let mut body: Value = resp
             .json()
             .await
             .context("Failed to read Elasticsearch gene-search response")?;
 
         let mut results = Vec::new();
-        for hit in collect_hits(&body) {
+        for hit in take_hits(&mut body) {
             let value = hit_value(&hit)?;
             let Some(gene_id) = json_str(value, &["gene_id"]) else {
                 continue;
@@ -410,12 +432,18 @@ fn id_field_for(variant_id: &str) -> &'static str {
     }
 }
 
-/// Pull `hits.hits` out of a response body as an owned `Vec<Value>`.
-fn collect_hits(body: &Value) -> Vec<Value> {
-    body["hits"]["hits"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
+/// Move `hits.hits` out of an owned response body as `Vec<Value>` **without
+/// cloning each hit**. The body is owned per-request, so we take the array out
+/// (replacing it with `Null`) rather than deep-cloning via `.as_array().cloned()`
+/// — that roughly halves per-page peak memory on large scroll pages.
+fn take_hits(body: &mut Value) -> Vec<Value> {
+    match body.get_mut("hits").and_then(|h| h.get_mut("hits")) {
+        Some(hits) => match hits.take() {
+            Value::Array(arr) => arr,
+            _ => Vec::new(),
+        },
+        None => Vec::new(),
+    }
 }
 
 /// Extract the stored source record from a hit: `hit._source.value` (prod wraps
@@ -492,10 +520,13 @@ mod tests {
     }
 
     #[test]
-    fn collect_hits_handles_missing() {
-        assert!(collect_hits(&json!({})).is_empty());
-        let body = json!({ "hits": { "hits": [ {"_id": "a"}, {"_id": "b"} ] } });
-        assert_eq!(collect_hits(&body).len(), 2);
+    fn take_hits_handles_missing() {
+        assert!(take_hits(&mut json!({})).is_empty());
+        let mut body = json!({ "hits": { "hits": [ {"_id": "a"}, {"_id": "b"} ] } });
+        let hits = take_hits(&mut body);
+        assert_eq!(hits.len(), 2);
+        // The array was moved out, leaving `hits.hits` null (no deep clone).
+        assert!(body["hits"]["hits"].is_null());
     }
 
     #[test]

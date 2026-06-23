@@ -52,6 +52,7 @@ use sqlx::Row;
 use std::time::Instant;
 
 use super::json_extract::variant_details_from_data;
+use super::xpos::compute_xpos;
 use super::{QueryStats, VariantBackend};
 use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
 use crate::models::db::DuckDbGeneRow;
@@ -221,23 +222,28 @@ impl PostgresBackend {
         start: i64,
         end: i64,
     ) -> Result<(Vec<Variant>, QueryStats)> {
-        // `pos` is INT (int4) in the table; bind i32 so the planner uses the
-        // (contig, pos) composite index instead of promoting the column to int8.
-        let start = clamp_pos(start);
-        let end = clamp_pos(end);
+        // Range-prune on the materialized `xpos BIGINT` column (the loader adds a
+        // btree on it). This is the fairness fix: the `Typed` arm's `t_contig` /
+        // `t_pos` generated columns aren't indexed, so the old
+        // `WHERE contig = $1 AND pos >= $2 AND pos <= $3` predicate seq-scanned in
+        // typed mode. Both modes now use the same indexed `xpos` window. `xpos`
+        // encodes the contig (X=23/Y=24/M=25/autosome=number), so a single
+        // [start_xpos, end_xpos] range is exactly the `chrom:start-end` region —
+        // no separate contig predicate needed. The SELECT projection is unchanged.
+        let xpos_start = compute_xpos(chrom, start);
+        let xpos_end = compute_xpos(chrom, end);
 
         let sql = format!(
             "SELECT {} FROM variants \
-             WHERE contig = $1 AND pos >= $2 AND pos <= $3 \
-             ORDER BY pos",
+             WHERE xpos >= $1 AND xpos <= $2 \
+             ORDER BY xpos",
             self.region_select_list()
         );
 
         let t_db = Instant::now();
         let rows = sqlx::query(&sql)
-            .bind(chrom)
-            .bind(start)
-            .bind(end)
+            .bind(xpos_start)
+            .bind(xpos_end)
             .fetch_all(&self.pool)
             .await
             .context("Postgres region query failed")?;
@@ -427,12 +433,6 @@ impl VariantBackend for PostgresBackend {
 
 fn elapsed_ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
-}
-
-/// gnomAD positions are positive and well within i32; clamp defensively so an
-/// out-of-range query degrades to an empty result rather than panicking.
-fn clamp_pos(p: i64) -> i32 {
-    p.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 type GeneRowTuple = (

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use clickhouse::Client;
 use std::time::Instant;
 
+use super::xpos::{compute_xpos, variant_id_to_xpos};
 use super::{QueryStats, VariantBackend};
 use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
 use crate::models::clickhouse::{ChGeneRow, ChSearchRow, ChVariantDetailRow, ChVariantRow};
@@ -128,6 +129,14 @@ impl VariantBackend for ClickHouseBackend {
         // `transcript_consequences[1]` is the lead consequence. `alleles`/`rsids`
         // are Array(Nullable(String)) in storage — drop NULLs so they decode into
         // the `Vec<String>` the row model expects.
+        // Region pruning now rides the scalar primary key. The table is
+        // `ORDER BY (xpos, alleles)`, so a `WHERE xpos BETWEEN ..` range lets
+        // ClickHouse skip whole granules instead of scanning the `locus` tuple.
+        // `xpos` already encodes the contig (X=23, Y=24, M=25, autosome=number),
+        // so a single [start_xpos, end_xpos] window is exactly the requested
+        // `chrom:start-end` region — no separate contig predicate needed.
+        let xpos_start = compute_xpos(chrom, start);
+        let xpos_end = compute_xpos(chrom, end);
         let t_db = Instant::now();
         let rows = self
             .client
@@ -151,12 +160,11 @@ impl VariantBackend for ClickHouseBackend {
                    transcript_consequences[1].transcript_id AS transcript_id, \
                    transcript_consequences[1].lof AS lof \
                  FROM variants \
-                 WHERE locus.1 = ? AND locus.2 >= ? AND locus.2 <= ? \
-                 ORDER BY locus.2",
+                 WHERE xpos >= ? AND xpos <= ? \
+                 ORDER BY xpos",
             )
-            .bind(chrom)
-            .bind(start)
-            .bind(end)
+            .bind(xpos_start)
+            .bind(xpos_end)
             .fetch_all::<ChVariantRow>()
             .await?;
         let db_query_ms = elapsed_ms(t_db);
@@ -198,29 +206,64 @@ impl VariantBackend for ClickHouseBackend {
         // them through to the frontend (matches duckdb.rs's `to_json(...)`).
         // Wrap in `toNullable` so the non-nullable `String` from `toJSONString`
         // matches the row model's `Option<String>` RowBinary decode.
+        // Point lookup: `WHERE variant_id = ?` alone is a full scan on this
+        // `ORDER BY (xpos, alleles)` table. Derive `xpos` from the variant_id
+        // and add it as an equality so the primary index narrows to the single
+        // granule for that locus; `variant_id` stays in the predicate for
+        // exactness (ref/alt disambiguation within a granule). If the id can't
+        // be parsed (unexpected shape), fall back to the variant_id-only scan so
+        // behavior/results are unchanged.
+        let xpos = variant_id_to_xpos(variant_id).ok();
         let t_db = Instant::now();
-        let row = self
-            .client
-            .query(
-                "SELECT \
-                   locus.1 AS chrom, \
-                   toInt64(locus.2) AS pos, \
-                   variant_id, \
-                   arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
-                   arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \
-                   caid, \
-                   toNullable(toJSONString(exome)) AS exome_json, \
-                   toNullable(toJSONString(genome)) AS genome_json, \
-                   toNullable(toJSONString(joint)) AS joint_json, \
-                   toNullable(toJSONString(transcript_consequences)) AS transcript_consequences_json, \
-                   toNullable(toJSONString(in_silico_predictors)) AS in_silico_predictors_json, \
-                   toNullable(toJSONString(coverage)) AS coverage_json \
-                 FROM variants \
-                 WHERE variant_id = ?",
-            )
-            .bind(variant_id)
-            .fetch_optional::<ChVariantDetailRow>()
-            .await?;
+        let row = match xpos {
+            Some(x) => {
+                self.client
+                    .query(
+                        "SELECT \
+                           locus.1 AS chrom, \
+                           toInt64(locus.2) AS pos, \
+                           variant_id, \
+                           arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
+                           arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \
+                           caid, \
+                           toNullable(toJSONString(exome)) AS exome_json, \
+                           toNullable(toJSONString(genome)) AS genome_json, \
+                           toNullable(toJSONString(joint)) AS joint_json, \
+                           toNullable(toJSONString(transcript_consequences)) AS transcript_consequences_json, \
+                           toNullable(toJSONString(in_silico_predictors)) AS in_silico_predictors_json, \
+                           toNullable(toJSONString(coverage)) AS coverage_json \
+                         FROM variants \
+                         WHERE xpos = ? AND variant_id = ?",
+                    )
+                    .bind(x)
+                    .bind(variant_id)
+                    .fetch_optional::<ChVariantDetailRow>()
+                    .await?
+            }
+            None => {
+                self.client
+                    .query(
+                        "SELECT \
+                           locus.1 AS chrom, \
+                           toInt64(locus.2) AS pos, \
+                           variant_id, \
+                           arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, alleles)) AS alleles, \
+                           arrayMap(x -> assumeNotNull(x), arrayFilter(x -> x IS NOT NULL, rsids)) AS rsids, \
+                           caid, \
+                           toNullable(toJSONString(exome)) AS exome_json, \
+                           toNullable(toJSONString(genome)) AS genome_json, \
+                           toNullable(toJSONString(joint)) AS joint_json, \
+                           toNullable(toJSONString(transcript_consequences)) AS transcript_consequences_json, \
+                           toNullable(toJSONString(in_silico_predictors)) AS in_silico_predictors_json, \
+                           toNullable(toJSONString(coverage)) AS coverage_json \
+                         FROM variants \
+                         WHERE variant_id = ?",
+                    )
+                    .bind(variant_id)
+                    .fetch_optional::<ChVariantDetailRow>()
+                    .await?
+            }
+        };
         let db_query_ms = elapsed_ms(t_db);
 
         let t_de = Instant::now();

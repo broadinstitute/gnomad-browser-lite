@@ -4,6 +4,7 @@ use duckdb::{params, Connection};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use super::xpos::{compute_xpos, variant_id_to_xpos};
 use super::VariantBackend;
 use crate::models::api::{Gene, SearchResult, Variant, VariantDetails};
 use crate::models::db::{DuckDbGeneRow, DuckDbVariantDetailRow, DuckDbVariantRow};
@@ -154,6 +155,13 @@ impl VariantBackend for DuckDbBackend {
     ) -> Result<Vec<Variant>> {
         let conn = self.conn.lock().unwrap();
 
+        // Range-prune on the materialized `xpos` column (the parquet is sorted by
+        // xpos, so DuckDB's zonemaps skip row-groups). `xpos` encodes the contig
+        // (X=23/Y=24/M=25/autosome=number), so a single [start_xpos, end_xpos]
+        // window is exactly the `chrom:start-end` region.
+        let xpos_start = compute_xpos(chrom, start);
+        let xpos_end = compute_xpos(chrom, end);
+
         let sql = r#"
             SELECT
                 locus.contig AS chrom,
@@ -177,16 +185,15 @@ impl VariantBackend for DuckDbBackend {
                 transcript_consequences[1].transcript_id AS transcript_id,
                 transcript_consequences[1].lof AS lof
             FROM variants
-            WHERE locus.contig = ?
-            AND locus.position >= ?
-            AND locus.position <= ?
-            ORDER BY locus.position
+            WHERE xpos >= ?
+            AND xpos <= ?
+            ORDER BY xpos
         "#;
 
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => {
-                // Fallback: try flat column names
+                // Fallback: try flat column names (still xpos-ranged).
                 let fallback_sql = r#"
                     SELECT
                         contig AS chrom,
@@ -208,10 +215,9 @@ impl VariantBackend for DuckDbBackend {
                         NULL AS transcript_id,
                         NULL AS lof
                     FROM variants
-                    WHERE contig = ?
-                    AND position >= ?
-                    AND position <= ?
-                    ORDER BY position
+                    WHERE xpos >= ?
+                    AND xpos <= ?
+                    ORDER BY xpos
                 "#;
                 conn.prepare(fallback_sql)
                     .context("Failed to prepare variants query")?
@@ -219,7 +225,7 @@ impl VariantBackend for DuckDbBackend {
         };
 
         let mut rows = stmt
-            .query(params![chrom, start, end])
+            .query(params![xpos_start, xpos_end])
             .context("Failed to execute variants query")?;
 
         let mut results = Vec::new();
@@ -253,7 +259,31 @@ impl VariantBackend for DuckDbBackend {
     ) -> Result<Option<VariantDetails>> {
         let conn = self.conn.lock().unwrap();
 
+        // Point lookup: add an `xpos = ?` equality (derived from the variant_id)
+        // so the xpos-sorted parquet's zonemaps prune to the one row-group for
+        // that locus instead of scanning every group for `variant_id`. Keep
+        // `variant_id = ?` for exactness. If the id can't be parsed, fall back to
+        // the variant_id-only lookup so results are unchanged.
+        let xpos = variant_id_to_xpos(variant_id).ok();
+
         let sql = r#"
+            SELECT
+                variant_id,
+                locus.contig AS chrom,
+                locus.position AS pos,
+                to_json(alleles) AS alleles,
+                to_json(rsids) AS rsids,
+                caid,
+                to_json(exome) AS exome,
+                to_json(genome) AS genome,
+                to_json(transcript_consequences) AS transcript_consequences,
+                to_json(in_silico_predictors) AS in_silico_predictors,
+                to_json(joint) AS joint,
+                to_json(coverage) AS coverage
+            FROM variants
+            WHERE xpos = ? AND variant_id = ?
+        "#;
+        let sql_fallback = r#"
             SELECT
                 variant_id,
                 locus.contig AS chrom,
@@ -271,9 +301,11 @@ impl VariantBackend for DuckDbBackend {
             WHERE variant_id = ?
         "#;
 
-        let mut stmt = conn.prepare(sql).context("Failed to prepare variant detail query")?;
+        let mut stmt = conn
+            .prepare(if xpos.is_some() { sql } else { sql_fallback })
+            .context("Failed to prepare variant detail query")?;
 
-        let result = stmt.query_row(params![variant_id], |row| {
+        let extract = |row: &duckdb::Row<'_>| -> duckdb::Result<DuckDbVariantDetailRow> {
             Ok(DuckDbVariantDetailRow {
                 variant_id: row.get("variant_id").ok(),
                 chrom: row.get("chrom")?,
@@ -288,7 +320,12 @@ impl VariantBackend for DuckDbBackend {
                 in_silico_predictors_json: row.get("in_silico_predictors").ok(),
                 coverage_json: row.get("coverage").ok(),
             })
-        });
+        };
+
+        let result = match xpos {
+            Some(x) => stmt.query_row(params![x, variant_id], extract),
+            None => stmt.query_row(params![variant_id], extract),
+        };
 
         match result {
             Ok(db_row) => Ok(Some(db_row.to_api()?)),

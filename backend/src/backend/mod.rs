@@ -6,6 +6,7 @@ pub mod hail;
 pub mod json_extract;
 pub mod postgres;
 pub mod tiered;
+pub mod xpos;
 
 use anyhow::Result;
 use async_trait::async_trait;

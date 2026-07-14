@@ -1,0 +1,68 @@
+{
+  "schema_version": "1",
+  "source": "examples/federation/partner-clean.vcf.bgz",
+  "dataset_id": "partner-clean-demo",
+  "reference_genome": "GRCh38",
+  "data_type": "wgs",
+  "generated_at": "2026-07-14T15:12:00Z",
+  "rows_scanned": 131007,
+  "summary": { "pass": 4, "warn": 0, "fail": 0 },
+  "checks": [
+    {
+      "id": "fields.biallelic",
+      "name": "Biallelic sites",
+      "tier": 1,
+      "category": "schema",
+      "status": "pass",
+      "metric": { "n_violations": 0, "n_sites": 131007 },
+      "message": "All 131,007 sites are biallelic.",
+      "n_violations": 0,
+      "examples": [],
+      "expectation": { "rule": "len(alleles) == 2 for every site" },
+      "plot": null,
+      "needs": []
+    },
+    {
+      "id": "fields.required",
+      "name": "Required fields present",
+      "tier": 1,
+      "category": "schema",
+      "status": "pass",
+      "metric": { "n_violations": 0 },
+      "message": "All required fields (AC, AN, nhomalt + strata) are present.",
+      "n_violations": 0,
+      "examples": [],
+      "expectation": { "rule": "AC, AN, nhomalt + per-ancestry/per-sex strata present" },
+      "plot": null,
+      "needs": []
+    },
+    {
+      "id": "fields.retired-terms",
+      "name": "No retired terminology",
+      "tier": 1,
+      "category": "schema",
+      "status": "pass",
+      "metric": { "n_violations": 0, "retired_terms": [] },
+      "message": "No retired ancestry labels found in freq_meta.",
+      "n_violations": 0,
+      "examples": [],
+      "expectation": { "rule": "reject oth, other, pop, population in freq_meta/globals" },
+      "plot": null,
+      "needs": ["globals"]
+    },
+    {
+      "id": "fields.contigs-grch38",
+      "name": "GRCh38 contigs only",
+      "tier": 1,
+      "category": "schema",
+      "status": "pass",
+      "metric": { "n_violations": 0, "invalid_contigs": [] },
+      "message": "All sites are on GRCh38 primary-assembly contigs.",
+      "n_violations": 0,
+      "examples": [],
+      "expectation": { "rule": "every locus.contig in the GRCh38 primary-assembly enum" },
+      "plot": null,
+      "needs": []
+    }
+  ]
+}

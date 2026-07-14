@@ -235,6 +235,55 @@ export interface SequencingTypeData {
   quality_metrics?: VariantQualityMetrics;
 }
 
+// ==================== QC Report Types ====================
+// Contract with the `gbl qc run` CLI. See docs/spec/qc/00-design-reference.md §6.
+
+/** Live statuses come from the report; `pending` is a frontend-only status for
+ *  catalog checks that have no result yet (rendered as "Not yet implemented"). */
+export type CheckStatus = 'pass' | 'warn' | 'fail' | 'pending';
+
+export type QCTier = 1 | 2 | 3;
+
+/** A precomputed plot summary attached to a check. `data` is always a small
+ *  summary array (never raw variants) — the browser only renders it. Plot
+ *  rendering itself is out of scope for the walking skeleton. */
+export interface Plot {
+  type: string;
+  title?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data?: any;
+}
+
+export interface QCCheckResult {
+  id: string;
+  name: string;
+  tier: QCTier;
+  category: string;
+  status: Exclude<CheckStatus, 'pending'>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  metric?: any;
+  message: string;
+  n_violations?: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  examples?: Record<string, any>[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  expectation?: any;
+  plot?: Plot | null;
+  needs?: string[];
+}
+
+export interface QCReport {
+  schema_version: string;
+  source: string;
+  dataset_id?: string;
+  reference_genome?: string;
+  data_type?: string;
+  generated_at: string;
+  rows_scanned: number;
+  summary: { pass: number; warn: number; fail: number };
+  checks: QCCheckResult[];
+}
+
 export interface VariantDetails extends Variant {
   caid?: string;
 

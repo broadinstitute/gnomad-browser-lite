@@ -1,0 +1,76 @@
+{
+  "schema_version": "1",
+  "source": "examples/federation/partner-broken.vcf.bgz",
+  "dataset_id": "partner-broken-demo",
+  "reference_genome": "GRCh38",
+  "data_type": "wgs",
+  "generated_at": "2026-07-14T15:10:00Z",
+  "rows_scanned": 128442,
+  "summary": { "pass": 1, "warn": 0, "fail": 3 },
+  "checks": [
+    {
+      "id": "fields.biallelic",
+      "name": "Biallelic sites",
+      "tier": 1,
+      "category": "schema",
+      "status": "pass",
+      "metric": { "n_violations": 0, "n_sites": 128442 },
+      "message": "All 128,442 sites are biallelic.",
+      "n_violations": 0,
+      "examples": [],
+      "expectation": { "rule": "len(alleles) == 2 for every site" },
+      "plot": null,
+      "needs": []
+    },
+    {
+      "id": "fields.required",
+      "name": "Required fields present",
+      "tier": 1,
+      "category": "schema",
+      "status": "fail",
+      "metric": { "n_violations": 1, "missing_fields": ["nhomalt"] },
+      "message": "Required field 'nhomalt' is absent from the freq schema.",
+      "n_violations": 1,
+      "examples": [
+        { "missing_field": "nhomalt", "location": "freq[].nhomalt", "note": "not present in any stratum" }
+      ],
+      "expectation": { "rule": "AC, AN, nhomalt + per-ancestry/per-sex strata present" },
+      "plot": null,
+      "needs": []
+    },
+    {
+      "id": "fields.retired-terms",
+      "name": "No retired terminology",
+      "tier": 1,
+      "category": "schema",
+      "status": "fail",
+      "metric": { "n_violations": 2, "retired_terms": ["oth", "pop"] },
+      "message": "2 retired ancestry labels found in freq_meta: 'oth', 'pop'.",
+      "n_violations": 2,
+      "examples": [
+        { "term": "oth", "location": "freq_meta[7].pop", "replacement": "remove" },
+        { "term": "pop", "location": "freq_meta[7].group", "replacement": "gen_anc" }
+      ],
+      "expectation": { "rule": "reject oth, other, pop, population in freq_meta/globals" },
+      "plot": null,
+      "needs": ["globals"]
+    },
+    {
+      "id": "fields.contigs-grch38",
+      "name": "GRCh38 contigs only",
+      "tier": 1,
+      "category": "schema",
+      "status": "fail",
+      "metric": { "n_violations": 314, "invalid_contigs": ["1", "GL000220.1"] },
+      "message": "314 sites are on 2 contigs not in the GRCh38 primary assembly.",
+      "n_violations": 314,
+      "examples": [
+        { "variant_id": "1-909238-C-T", "contig": "1", "note": "GRCh37-style contig name" },
+        { "variant_id": "GL000220.1-112-A-G", "contig": "GL000220.1", "note": "unplaced contig" }
+      ],
+      "expectation": { "rule": "every locus.contig in the GRCh38 primary-assembly enum" },
+      "plot": null,
+      "needs": []
+    }
+  ]
+}

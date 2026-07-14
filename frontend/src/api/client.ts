@@ -10,6 +10,7 @@ import type {
   Exon,
   VariantDetails,
   BrandingConfig,
+  QCReport,
 } from './types';
 
 const GNOMAD_API_URL = 'https://gnomad.broadinstitute.org/api';
@@ -132,6 +133,42 @@ export const api = {
   async searchGenes(query: string, limit = 10): Promise<SearchResponse> {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return fetchJson<SearchResponse>(`${API_BASE}/api/search?${params}`);
+  },
+
+  /**
+   * Get the QC validity report.
+   *
+   * Tries the backend endpoint (`/api/qc-report`, served from the report path
+   * configured in `gbl.toml`). While that endpoint is still being built, falls
+   * back to the checked-in demo fixture at `/sample-qc-report.json` so the /qc
+   * page renders end-to-end today. Returns `null` when neither is available —
+   * the page then shows the "run `gbl qc run`" empty state.
+   *
+   * When the real endpoint lands, this transparently starts serving live data:
+   * no page or type change needed.
+   */
+  async getQCReport(): Promise<QCReport | null> {
+    // 1. Real backend endpoint (may 404 until [qc] report_path is configured).
+    try {
+      const res = await fetch(`${API_BASE}/api/qc-report`);
+      if (res.ok) {
+        return (await res.json()) as QCReport;
+      }
+    } catch {
+      // Backend unreachable or route not present yet — fall through to fixture.
+    }
+
+    // 2. Checked-in demo fixture (served from the frontend origin's /public).
+    try {
+      const res = await fetch('/sample-qc-report.json');
+      if (res.ok) {
+        return (await res.json()) as QCReport;
+      }
+    } catch {
+      // No fixture either.
+    }
+
+    return null;
   },
 
   /**

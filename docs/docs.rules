@@ -1,0 +1,10 @@
+backend/**/*.ts
+backend/**/*.js
+frontend/src/**/*.tsx
+frontend/src/**/*.ts
+package.json
+README.md
+CLAUDE.md
+
+!**/node_modules
+!**/dist

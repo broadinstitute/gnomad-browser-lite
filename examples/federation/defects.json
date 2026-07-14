@@ -1,0 +1,254 @@
+{
+  "source_fixture": "partner-clean.vcf.bgz",
+  "output_fixture": "partner-broken.vcf.bgz",
+  "n_records_clean": 160903,
+  "n_records_broken": 129340,
+  "params": {
+    "n_per_arith_defect": 5,
+    "n_titv_flip": 4000,
+    "common_af": 0.05
+  },
+  "clean_caveats": [
+    {
+      "check": "complete.chromosomes",
+      "reason": "regional fixture carries only chr1/17/21/22/X/Y, not all autosomes; genome-completeness is calibration-dependent."
+    },
+    {
+      "check": "bio.titv",
+      "reason": "regional PASS Ti/Tv ~1.75 sits below the genome-wide WGS band (2.0-2.1); Tier-2 bands are methods-team-calibrated."
+    }
+  ],
+  "defects": [
+    {
+      "defect": 1,
+      "name": "Retired ancestry term",
+      "checks": [
+        "fields.retired-terms"
+      ],
+      "tier": 1,
+      "n_records": 129340,
+      "example_variant_ids": [
+        "1-55039020-T-C",
+        "1-55039027-G-T",
+        "1-55039029-A-G",
+        "1-55039047-A-C",
+        "1-55039048-A-C",
+        "1-55039051-A-G",
+        "1-55039055-A-C",
+        "1-55039069-G-A",
+        "1-55039070-C-G",
+        "1-55039079-G-A",
+        "1-55039082-A-T",
+        "1-55039096-G-A",
+        "1-55039098-G-A",
+        "1-55039098-G-T",
+        "1-55039104-A-G",
+        "1-55039113-A-G",
+        "1-55039115-G-A",
+        "1-55039118-G-A",
+        "1-55039125-G-C",
+        "1-55039130-G-T"
+      ],
+      "note": "nfe strata relabeled 'oth' (a retired gnomAD term) in every INFO key + header. Applies file-wide by nature of the schema."
+    },
+    {
+      "defect": 2,
+      "name": "Non-GRCh38 contig",
+      "checks": [
+        "fields.contigs-grch38"
+      ],
+      "tier": 1,
+      "n_records": 5,
+      "example_variant_ids": [
+        "1-55039020-T-C",
+        "1-55039027-G-T",
+        "1-55039029-A-G",
+        "1-55039047-A-C",
+        "1-55039048-A-C"
+      ],
+      "note": "CHROM relabeled chr1 -> 1 (GRCh37-style)."
+    },
+    {
+      "defect": 3,
+      "name": "Missing required field",
+      "checks": [
+        "fields.required"
+      ],
+      "tier": 1,
+      "n_records": 5,
+      "example_variant_ids": [
+        "1-55039051-A-G",
+        "1-55039055-A-C",
+        "1-55039069-G-A",
+        "1-55039070-C-G",
+        "1-55039079-G-A"
+      ],
+      "note": "Global nhomalt INFO key removed."
+    },
+    {
+      "defect": 4,
+      "name": "AC greater than AN",
+      "checks": [
+        "arith.ac-le-an"
+      ],
+      "tier": 1,
+      "n_records": 5,
+      "example_variant_ids": [
+        "1-55039082-A-T",
+        "1-55039096-G-A",
+        "1-55039098-G-A",
+        "1-55039098-G-T",
+        "1-55039104-A-G"
+      ],
+      "note": "Record rewritten to AC=51, AN=40 (AF, subgroup sums, nhomalt left self-consistent so only ac-le-an trips)."
+    },
+    {
+      "defect": 5,
+      "name": "AF inconsistent with AC/AN",
+      "checks": [
+        "arith.af-consistent"
+      ],
+      "tier": 1,
+      "n_records": 5,
+      "example_variant_ids": [
+        "1-55039113-A-G",
+        "1-55039115-G-A",
+        "1-55039118-G-A",
+        "1-55039125-G-C",
+        "1-55039130-G-T"
+      ],
+      "note": "Global AF overwritten to 0.5 while AC/AN unchanged."
+    },
+    {
+      "defect": 6,
+      "name": "Subgroup sum != global",
+      "checks": [
+        "arith.subgroup-sums"
+      ],
+      "tier": 1,
+      "n_records": 5,
+      "example_variant_ids": [
+        "1-55039140-A-T",
+        "1-55039144-G-A",
+        "1-55039145-G-C",
+        "1-55039146-C-T",
+        "1-55039153-G-C"
+      ],
+      "note": "AC_afr bumped by 25 without touching global AC (AF_afr kept consistent, AC_afr<=AN_afr, so only subgroup-sums trips)."
+    },
+    {
+      "defect": 7,
+      "name": "nhomalt > AC/2",
+      "checks": [
+        "arith.nhomalt-le-half-ac"
+      ],
+      "tier": 1,
+      "n_records": 5,
+      "example_variant_ids": [
+        "1-55039176-G-A",
+        "1-55039182-C-T",
+        "1-55039196-C-A",
+        "1-55039240-G-C",
+        "1-55039259-A-C"
+      ],
+      "note": "Global nhomalt set equal to AC (impossible; > AC/2)."
+    },
+    {
+      "defect": 8,
+      "name": "Missing chrY",
+      "checks": [
+        "complete.chromosomes",
+        "bio.chrxy"
+      ],
+      "tier": 1,
+      "n_records": 31563,
+      "example_variant_ids": [
+        "Y-2800017-A-C",
+        "Y-2800066-C-T",
+        "Y-2800092-AT-A",
+        "Y-2800099-G-A",
+        "Y-2800100-C-T",
+        "Y-2800101-G-C",
+        "Y-2800117-G-A",
+        "Y-2800121-A-G",
+        "Y-2800126-A-G",
+        "Y-2800131-TGTAGGAGA-T",
+        "Y-2800181-TA-T",
+        "Y-2800183-A-G",
+        "Y-2800235-C-T",
+        "Y-2800236-G-A",
+        "Y-2800282-T-A",
+        "Y-2800284-A-G",
+        "Y-2800310-A-T",
+        "Y-2800339-T-C",
+        "Y-2800359-A-G",
+        "Y-2800381-AG-A"
+      ],
+      "note": "All 31563 chrY records dropped; chrY ##contig line removed."
+    },
+    {
+      "defect": 9,
+      "name": "Contamination signature (low nhomalt)",
+      "checks": [
+        "bio.inbreeding-f"
+      ],
+      "tier": 2,
+      "n_records": 1803,
+      "example_variant_ids": [
+        "1-55039774-C-T",
+        "1-55039879-A-ACTG",
+        "1-55039995-C-T",
+        "1-55040059-A-G",
+        "1-55040188-G-A",
+        "1-55040253-C-T",
+        "1-55040430-C-G",
+        "1-55040948-G-A",
+        "1-55041976-C-T",
+        "1-55042209-C-T",
+        "1-55042283-G-A",
+        "1-55042513-T-A",
+        "1-55043540-G-C",
+        "1-55043682-C-T",
+        "1-55044199-T-C",
+        "1-55044227-C-T",
+        "1-55044266-T-C",
+        "1-55044601-AC-A",
+        "1-55045140-CGAA-C",
+        "1-55045298-T-C"
+      ],
+      "note": "nhomalt zeroed on all strata for 1803 common (AF>=0.05) sites -> excess heterozygosity, F << 0. Approximate: Tier-2 band is calibrated later."
+    },
+    {
+      "defect": 10,
+      "name": "Poor filtering (low Ti/Tv)",
+      "checks": [
+        "bio.titv"
+      ],
+      "tier": 2,
+      "n_records": 4000,
+      "example_variant_ids": [
+        "22-20000032-T-G",
+        "22-20000042-C-A",
+        "22-20000047-T-G",
+        "22-20000052-C-A",
+        "22-20000053-C-A",
+        "22-20000075-G-C",
+        "22-20000094-A-C",
+        "22-20000095-C-A",
+        "22-20000097-C-A",
+        "22-20000101-T-G",
+        "22-20000125-C-A",
+        "22-20000132-G-C",
+        "22-20000144-C-A",
+        "22-20000149-C-A",
+        "22-20000152-G-C",
+        "22-20000168-T-G",
+        "22-20000173-T-G",
+        "22-20000178-A-C",
+        "22-20000181-G-C",
+        "22-20000190-T-G"
+      ],
+      "note": "4000 chr22 PASS transitions converted to transversions. Approximate: Tier-2 band is calibrated later."
+    }
+  ]
+}

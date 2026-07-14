@@ -1,0 +1,16 @@
+# Fully-offline instance: DuckDB over the exported Parquet files in ./data.
+# No network / GCS auth required. Run `./scripts/setup.sh` first to export
+# data/{variants,genes}.parquet (the variants Parquet must carry a materialized
+# `xpos` column — see the "Offline / local DuckDB path" section of the README).
+[server]
+port = 3000
+vite_port = 5173
+
+[backend]
+type = "duckdb"
+data_dir = "data"
+
+[branding]
+name = "gnomAD Browser Lite (local)"
+navbar_color = "#333"
+accent_color = "#0066cc"

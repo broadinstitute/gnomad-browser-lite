@@ -1,142 +1,231 @@
 # gnomAD Browser Lite
 
-A lightweight, standalone variant browser that uses DuckDB and Parquet files for storage. This project provides a simplified version of the gnomAD browser that can run locally without requiring a live ElasticSearch cluster or GraphQL API.
+A lightweight, self-hostable, **rebrandable** variant browser. It serves a
+gnomAD-style gene / region / variant UI on top of a pluggable backend — from the
+public gnomAD Hail tables on GCS (zero setup) to local Parquet, ClickHouse,
+Postgres, or Elasticsearch. A single Rust binary (`gbl`) reads one `gbl.toml`
+file that selects the backend and the branding, so multiple consortia can run
+their own instance from the same code.
 
 ## Architecture
 
-- **Backend**: Rust + Axum web server with DuckDB for querying Parquet files
-- **Frontend**: React + TypeScript + Vite with styled-components
+- **Backend** — Rust + Axum. One binary, `gbl`, with subcommands (`serve`,
+  `load`, `validate`, `mcp`, …). The active data store is chosen at runtime by
+  the `[backend]` section of `gbl.toml`.
+- **Frontend** — React + TypeScript + Vite (styled-components). Reads branding
+  from the backend's `/api/config`, so the same build re-skins per instance.
+- **AI assistant** *(optional)* — a CopilotKit ↔ MCP bridge (`start-bridge.sh`)
+  that exposes the backend's MCP server to an in-app assistant.
+
+## Backends
+
+Selected via `[backend] type = "..."` in `gbl.toml`:
+
+| `type`          | Data store                                  | Notes |
+|-----------------|---------------------------------------------|-------|
+| `hail`          | gnomAD Hail tables on GCS                   | **Default.** Zero data prep; queries public `gs://gcp-public-data--gnomad/...` tables directly. |
+| `duckdb`        | Local Parquet files                         | Fully offline. Requires exported `data/*.parquet` carrying a materialized `xpos` column. |
+| `clickhouse`    | ClickHouse                                  | HTTP URL + database. |
+| `postgres`      | Postgres (JSONB wide table)                 | `query_mode = "jsonb"` or `"typed"`. |
+| `elasticsearch` | Elasticsearch                               | The gnomAD-prod-style baseline. |
+| `tiered`        | Region-aware router over two backends       | Hot set (CDS/gene bodies) → `fast`, everything else → `fallback`. |
+| `gcscache`      | Materialized response cache over a fallback | Gene-view responses served from RAM/SSD/lazy cache. |
+
+The Postgres / ClickHouse / Elasticsearch / tiered / cache arms exist primarily
+as benchmark backends; `hail` and `duckdb` are the two you'll use for local dev.
 
 ## Prerequisites
 
-- Rust 1.70+
-- Node.js 20.19+ (or 22.12+)
-- pnpm
-- [DuckDB](https://duckdb.org/) (system library, e.g., `brew install duckdb`)
-- [`hail-decoder`](https://github.com/broadinstitute/hail-rust-decoder) CLI (for exporting data to Parquet)
-- Optional: `cargo-watch` for backend hot reload (`cargo install cargo-watch`)
+- Rust (stable) — `cargo`, and optionally [`cargo-watch`](https://crates.io/crates/cargo-watch) for backend hot reload
+- Node.js 20.19+ (or 22.12+) and `pnpm`
+- **For the default `hail` backend:** the [gcloud CLI](https://cloud.google.com/sdk/docs/install) with Application Default Credentials —
+  ```bash
+  gcloud auth application-default login
+  ```
+  The gnomAD buckets are public, but the GCS client still mints an OAuth token, so ADC must be present.
+- **For the `duckdb` backend only:** the DuckDB system library (`brew install duckdb`) and, to export data, the [`hail-decoder`](https://github.com/broadinstitute/hail-rust-decoder) CLI.
 
-## Quick Start
+## Quick start (zero-config, public gnomAD data)
+
+No data export needed — this queries the public gnomAD tables on GCS directly.
 
 ```bash
-./scripts/setup.sh
+gcloud auth application-default login   # once, if you haven't
+pnpm install
+pnpm start
 ```
 
-This will:
-1. Export variant and gene data from gnomAD to Parquet files
-2. Build the backend
-3. Install frontend dependencies
-4. Generate port configuration
+`pnpm start` launches three processes together (via `concurrently`): the
+**backend**, the AI-assistant **bridge**, and the **frontend**.
 
-Then start the servers:
+- Frontend → the `VITE_PORT` in `.env` (e.g. http://localhost:5173)
+- Backend  → http://localhost:3000
+
+> **First boot takes ~30 s to ~2 min.** The `hail` backend binds its port only
+> *after* it builds an in-memory gene-symbol index (~60k symbols) and, if a
+> `constraint_path` is configured, loads the constraint metrics table. Until
+> then the UI shows **"API not available."** — that's expected; wait for this
+> backend log line and refresh:
+>
+> ```
+> INFO backend: Starting server on 0.0.0.0:3000
+> ```
+
+Open the frontend URL and search a gene (e.g. `PCSK9`).
+
+### Selecting a config / branded instance
+
+The zero-config default is the Hail backend on the public gnomAD tables with no
+constraint panel and default branding. To run a specific configuration (backend,
+constraint, branding), point `GBL_CONFIG` at a `gbl.toml`:
 
 ```bash
-./scripts/start-backend.sh   # Terminal 1
-./scripts/start-frontend.sh  # Terminal 2
+GBL_CONFIG=examples/gnomad/gbl.toml pnpm start
 ```
 
-- Backend: http://localhost:3000
-- Frontend: http://localhost:5173
-
-## Working with Worktrees
-
-For parallel development on multiple branches, create isolated worktrees with unique ports:
+Both `start-backend.sh` and `start-bridge.sh` honor `GBL_CONFIG`. You can also
+run the binary directly:
 
 ```bash
-# Create a worktree with its own data and ports
+./backend/target/release/backend --config examples/gnomad/gbl.toml serve
+```
+
+## Configuration (`gbl.toml`)
+
+Each instance is described by one TOML file. See [`examples/`](examples/) for
+working configs (`gnomad`, `cgdc`, `singapore`, `vep-test`).
+
+```toml
+[server]
+port = 3000
+vite_port = 5900
+
+[backend]
+type = "hail"
+variants_path    = "gs://gcp-public-data--gnomad/release/4.1.1/ht/browser/gnomad.browser.v4.1.1.sites.ht"
+genes_path       = "gs://gcp-public-data--gnomad/resources/grch38/browser/gnomad.genes.GRCh38.GENCODEv39.pext.ht"
+constraint_path  = "gs://gcp-public-data--gnomad/release/4.1.1/constraint/gnomad.v4.1.1.constraint_metrics.ht"
+# Optional on-the-fly VEP annotation:
+# vep_gff3  = "/path/to/Homo_sapiens.GRCh38.115.gff3.gz"
+# vep_fasta = "/path/to/Homo_sapiens.GRCh38.dna.primary_assembly.fa"
+
+[branding]
+name             = "gnomAD Browser Lite"
+navbar_color     = "#333"
+accent_color     = "#0066cc"
+# short_name, full_title, navbar_text_color, logo_url, favicon_url,
+# homepage_content / about_content / terms_content (Markdown paths),
+# external_links = [{ label = "...", url = "..." }]
+```
+
+To stand up a new consortium instance, copy an example, swap the `[backend]`
+paths and `[branding]` fields, and run with `GBL_CONFIG` pointing at it.
+
+## Running
+
+```bash
+pnpm start            # backend + bridge + frontend (concurrently)
+pnpm stop             # kill servers using ports from .env
+
+pnpm start:backend    # backend only  (./scripts/start-backend.sh)
+pnpm start:bridge     # AI bridge only (./scripts/start-bridge.sh)
+pnpm start:frontend   # frontend only  (./scripts/start-frontend.sh)
+```
+
+### Ports & worktrees
+
+Ports live in `.env` (gitignored, generated by setup). **Always check `.env`
+before starting or killing servers** — each worktree gets its own deterministic
+ports so multiple instances run at once.
+
+```bash
+cat .env   # PORT (backend), VITE_PORT (frontend), VITE_API_URL
+```
+
+```bash
+# Create an isolated worktree with its own data + ports
 ./scripts/setup.sh --create-worktree ../my-feature
+./scripts/setup.sh --create-worktree ../my-feature --from-main   # fast: copy data/build from main
 
-# Or setup an existing worktree
+# Configure an existing worktree
 ./scripts/setup.sh --worktree-name my-feature
 ```
 
-Each worktree gets deterministic ports based on its name, so multiple instances can run simultaneously without conflicts.
+## The `gbl` CLI
 
-### Setup Options
+The backend binary is a multi-command CLI (`--config <path>` is global):
+
+| Command | Purpose |
+|---------|---------|
+| `serve [--port N]` | Start the REST API server (default command). |
+| `load <src> --target duck-db\|click-house --table-type genes\|variants` | ETL a Hail table into a backend. |
+| `validate <src> [--schema f.json]` | Validate a source table against the expected gnomAD schema. |
+| `mcp stdio` | Run the MCP server over stdio (used by the CopilotKit bridge / Claude Desktop). |
+| `pool …` / `clickhouse …` | Manage GCP worker pools / ClickHouse infra (advanced). |
+
+Run `./backend/target/release/backend --help` (or `cargo run -- --help`) for the full list.
+
+## Offline / local DuckDB path
+
+To run without any network access, export the gnomAD tables to Parquet and use
+the `duckdb` backend:
 
 ```bash
-./scripts/setup.sh [OPTIONS]
-
-Options:
-    --worktree-name NAME    Name for unique port generation
-    --create-worktree PATH  Create a new git worktree at PATH
-    --branch BRANCH         Branch for new worktree (default: new branch from HEAD)
-    --intervals FILE        Intervals file for data export (default: data/test_intervals.json)
-    --skip-data             Skip parquet data export
-    --skip-build            Skip backend/frontend builds
+./scripts/setup.sh                 # exports data/{variants,genes}.parquet, builds, writes .env
+GBL_CONFIG=examples/local/gbl.toml pnpm start   # a duckdb config pointing at data/
 ```
 
-## Data Configuration
+The exported Parquet **must include a materialized `xpos` column** (global
+coordinate = `contig_number * 1e9 + position`); the DuckDB backend range-prunes
+region/point queries on it. Parquet exported before that column was introduced
+will fail variant queries with *"Failed to prepare variants query"* — re-export
+with a current `hail-decoder` / `gbl load`.
 
-The test intervals are configured in `data/test_intervals.json`:
-```json
-[
-  {"contig": "chr1", "start": 55039000, "end": 55065000},
-  {"contig": "chr17", "start": 43044000, "end": 43126000}
-]
-```
-
-These intervals cover PCSK9 and BRCA1 genes. Edit this file and re-run setup to include different regions.
-
-## API Endpoints
+## API endpoints
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/health` | Health check |
-| `GET /api/gene/:gene_id` | Get gene by ID or symbol |
-| `GET /api/gene/:gene_id/variants` | Get variants for a gene |
-| `GET /api/region/:region_id` | Get variants in a region (format: `chr1-55039000-55065000`) |
+| `GET /api/config` | Branding / instance config (consumed by the frontend) |
 | `GET /api/search?q=:query` | Search genes by symbol prefix |
-| `GET /api/schema/:table` | Get table schema (genes or variants) |
+| `GET /api/gene/:gene_id` | Gene by Ensembl ID or symbol (incl. constraint) |
+| `GET /api/gene/:gene_id/variants` | Variants for a gene |
+| `GET /api/gene/:gene_id/variants/stream` | Streaming variant rows for a gene |
+| `GET /api/region/:region_id` | Variants in a region (`1-55039447-55064852`) |
+| `GET /api/variants/stream` | Streaming variants for a region |
+| `GET /api/variant/:variant_id` | Single variant detail (`1-55039447-C-T`) |
+| `GET /api/schema/:table` | Table schema (`genes` or `variants`) |
 
-## Project Structure
+## Project structure
 
 ```
 gnomad-browser-lite/
-├── scripts/                   # Setup and run scripts
-│   ├── setup.sh              # Main setup script
-│   ├── start-backend.sh      # Start backend server
-│   └── start-frontend.sh     # Start frontend dev server
-├── data/                      # Parquet files and intervals config
-│   ├── test_intervals.json    # Genomic intervals to export
-│   ├── variants.parquet       # Exported variant data (gitignored)
-│   └── genes.parquet          # Exported gene data (gitignored)
-├── backend/                   # Rust API server
-│   ├── src/
-│   │   ├── main.rs           # Axum routes and server
-│   │   └── db.rs             # DuckDB database layer
-│   └── Cargo.toml
-└── frontend/                  # React application
-    ├── src/
-    │   ├── api/              # API client and types
-    │   ├── components/       # Reusable components
-    │   ├── pages/            # Page components
-    │   └── App.tsx           # Main app with routing
-    └── package.json
+├── scripts/                # setup.sh, start-{backend,bridge,frontend}.sh, stop.sh
+├── examples/               # per-instance gbl.toml configs (gnomad, cgdc, singapore, vep-test)
+├── data/                   # exported Parquet + test_intervals.json (gitignored parquet)
+├── backend/                # Rust `gbl` binary
+│   └── src/
+│       ├── main.rs         # Axum routes + server bootstrap
+│       ├── config.rs       # gbl.toml parsing + backend selection
+│       ├── cli.rs          # clap CLI definition
+│       └── backend/        # hail, duckdb, clickhouse, postgres, elasticsearch, tiered, gcs_cache, xpos
+└── frontend/               # React app (pages: Home, Gene, Region, Variant)
 ```
-
-## Features
-
-- **Gene View**: View gene information and associated variants
-- **Region View**: Browse variants in a genomic region
-- **Search**: Find genes by symbol prefix
-- **Variant Table**: Sortable, filterable table with key annotations
 
 ## Development
 
-### Backend
-
 ```bash
+# Backend
 cd backend
-cargo check   # Type check
-cargo run     # Run server
-```
+cargo check
+cargo run -- --config ../examples/gnomad/gbl.toml serve
 
-### Frontend
-
-```bash
+# Frontend
 cd frontend
-pnpm dev      # Development server
-pnpm build    # Production build
-pnpm preview  # Preview production build
+pnpm dev        # dev server (Vite HMR)
+pnpm build      # production build
+pnpm preview    # preview production build
 ```
+
+Frontend changes hot-reload via Vite. With `cargo-watch` installed, the backend
+rebuilds on change (note: a rebuild re-triggers the Hail startup scan).

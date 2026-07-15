@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Pre-computed projection for variant list view — avoids re-parsing on every request.
 /// Includes both gnomAD-native fields and VCF+VEP fields for seamless dual-schema support.
@@ -98,8 +98,10 @@ pub struct HailBackend {
     genes_engine: Arc<RwLock<QueryEngine>>,
     /// symbol (uppercase) → gene_id mapping built at startup
     symbol_to_gene_id: Arc<HashMap<String, String>>,
-    /// gene_id → constraint metrics loaded from optional constraint table
-    constraint_map: Arc<HashMap<String, GeneConstraint>>,
+    /// gene_id → constraint metrics loaded from optional constraint table.
+    /// Populated by a background thread so the server can bind the port
+    /// immediately; empty until the (slow) constraint scan completes.
+    constraint_map: Arc<RwLock<HashMap<String, GeneConstraint>>>,
     variants_path: String,
 }
 
@@ -107,6 +109,86 @@ pub struct HailBackend {
 pub struct VepConfig {
     pub gff3: String,
     pub fasta: Option<String>,
+}
+
+/// Scan the constraint Hail table and build a gene_id → constraint metrics map.
+/// Extracted so it can run on a background thread off the startup path.
+fn load_constraint_map(constraint_path: &str) -> Result<HashMap<String, GeneConstraint>> {
+    let constraint_engine = QueryEngine::open_path_cached(constraint_path, Some(CacheOptions::default()))
+        .context("Failed to open constraint table")?;
+    let projection = Arc::clone(&CONSTRAINT_PROJECTION);
+    let mut map = HashMap::new();
+    for row_result in constraint_engine.query_iter_with_projection(&[], None, Some(projection))? {
+        let row = match row_result {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        // Only include canonical transcripts
+        let is_canonical = get_field(&row, "canonical")
+            .and_then(|v| match v {
+                EncodedValue::Boolean(b) => Some(*b),
+                _ => None,
+            })
+            .unwrap_or(false);
+        if !is_canonical {
+            continue;
+        }
+        let gene_id = match get_field(&row, "gene_id").and_then(as_string) {
+            Some(id) => id,
+            None => continue,
+        };
+        // Skip if already in the map (one entry per gene)
+        if map.contains_key(&gene_id) {
+            continue;
+        }
+        let as_opt_i64 = |v: Option<&EncodedValue>| -> Option<i64> {
+            v.and_then(|val| match val {
+                EncodedValue::Int32(i) => Some(*i as i64),
+                EncodedValue::Int64(i) => Some(*i),
+                EncodedValue::Float64(f) => Some(*f as i64),
+                _ => None,
+            })
+        };
+
+        let exp_lof = get_nested_field(&row, "lof.exp").and_then(as_f64);
+        let exp_mis = get_nested_field(&row, "mis.exp").and_then(as_f64);
+        let exp_syn = get_nested_field(&row, "syn.exp").and_then(as_f64);
+        let obs_lof = as_opt_i64(get_nested_field(&row, "lof.obs"));
+        let obs_mis = as_opt_i64(get_nested_field(&row, "mis.obs"));
+        let obs_syn = as_opt_i64(get_nested_field(&row, "syn.obs"));
+        let oe_lof = get_nested_field(&row, "lof.oe").and_then(as_f64);
+        let oe_lof_lower = get_nested_field(&row, "lof.oe_ci.lower").and_then(as_f64);
+        let oe_lof_upper = get_nested_field(&row, "lof.oe_ci.upper").and_then(as_f64);
+        let oe_mis = get_nested_field(&row, "mis.oe").and_then(as_f64);
+        let oe_mis_lower = get_nested_field(&row, "mis.oe_ci.lower").and_then(as_f64);
+        let oe_mis_upper = get_nested_field(&row, "mis.oe_ci.upper").and_then(as_f64);
+        let oe_syn = get_nested_field(&row, "syn.oe").and_then(as_f64);
+        let oe_syn_lower = get_nested_field(&row, "syn.oe_ci.lower").and_then(as_f64);
+        let oe_syn_upper = get_nested_field(&row, "syn.oe_ci.upper").and_then(as_f64);
+        let lof_z = get_nested_field(&row, "lof.z_score").and_then(as_f64);
+        let mis_z = get_nested_field(&row, "mis.z_score").and_then(as_f64);
+        let syn_z = get_nested_field(&row, "syn.z_score").and_then(as_f64);
+        let pli = get_nested_field(&row, "lof.pLI").and_then(as_f64);
+        let loeuf = oe_lof_upper;
+        let flags = get_field(&row, "constraint_flags").and_then(|v| {
+            if let EncodedValue::Array(arr) = v {
+                let strs: Vec<String> = arr.iter().filter_map(|a| a.as_string()).collect();
+                if strs.is_empty() { None } else { Some(strs) }
+            } else {
+                None
+            }
+        });
+        map.insert(gene_id, GeneConstraint {
+            exp_lof, exp_mis, exp_syn,
+            obs_lof, obs_mis, obs_syn,
+            oe_lof, oe_lof_lower, oe_lof_upper,
+            oe_mis, oe_mis_lower, oe_mis_upper,
+            oe_syn, oe_syn_lower, oe_syn_upper,
+            lof_z, mis_z, syn_z,
+            pli, loeuf, flags,
+        });
+    }
+    Ok(map)
 }
 
 impl HailBackend {
@@ -172,94 +254,40 @@ impl HailBackend {
         }
         info!("Built gene symbol index: {} symbols", symbol_map.len());
 
-        // Load constraint metrics if path is provided
-        let constraint_map = if let Some(cp) = constraint_path {
-            info!("Loading constraint metrics from {}", cp);
-            let constraint_engine = QueryEngine::open_path_cached(cp, Some(CacheOptions::default()))
-                .context("Failed to open constraint table")?;
-            let projection = Arc::clone(&CONSTRAINT_PROJECTION);
-            let mut map = HashMap::new();
-            for row_result in constraint_engine.query_iter_with_projection(&[], None, Some(projection))? {
-                let row = match row_result {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-                // Only include canonical transcripts
-                let is_canonical = get_field(&row, "canonical")
-                    .and_then(|v| match v {
-                        EncodedValue::Boolean(b) => Some(*b),
-                        _ => None,
-                    })
-                    .unwrap_or(false);
-                if !is_canonical {
-                    continue;
-                }
-                let gene_id = match get_field(&row, "gene_id").and_then(as_string) {
-                    Some(id) => id,
-                    None => continue,
-                };
-                // Skip if already in the map (one entry per gene)
-                if map.contains_key(&gene_id) {
-                    continue;
-                }
-                let as_opt_i64 = |v: Option<&EncodedValue>| -> Option<i64> {
-                    v.and_then(|val| match val {
-                        EncodedValue::Int32(i) => Some(*i as i64),
-                        EncodedValue::Int64(i) => Some(*i),
-                        EncodedValue::Float64(f) => Some(*f as i64),
-                        _ => None,
-                    })
-                };
-
-                let exp_lof = get_nested_field(&row, "lof.exp").and_then(as_f64);
-                let exp_mis = get_nested_field(&row, "mis.exp").and_then(as_f64);
-                let exp_syn = get_nested_field(&row, "syn.exp").and_then(as_f64);
-                let obs_lof = as_opt_i64(get_nested_field(&row, "lof.obs"));
-                let obs_mis = as_opt_i64(get_nested_field(&row, "mis.obs"));
-                let obs_syn = as_opt_i64(get_nested_field(&row, "syn.obs"));
-                let oe_lof = get_nested_field(&row, "lof.oe").and_then(as_f64);
-                let oe_lof_lower = get_nested_field(&row, "lof.oe_ci.lower").and_then(as_f64);
-                let oe_lof_upper = get_nested_field(&row, "lof.oe_ci.upper").and_then(as_f64);
-                let oe_mis = get_nested_field(&row, "mis.oe").and_then(as_f64);
-                let oe_mis_lower = get_nested_field(&row, "mis.oe_ci.lower").and_then(as_f64);
-                let oe_mis_upper = get_nested_field(&row, "mis.oe_ci.upper").and_then(as_f64);
-                let oe_syn = get_nested_field(&row, "syn.oe").and_then(as_f64);
-                let oe_syn_lower = get_nested_field(&row, "syn.oe_ci.lower").and_then(as_f64);
-                let oe_syn_upper = get_nested_field(&row, "syn.oe_ci.upper").and_then(as_f64);
-                let lof_z = get_nested_field(&row, "lof.z_score").and_then(as_f64);
-                let mis_z = get_nested_field(&row, "mis.z_score").and_then(as_f64);
-                let syn_z = get_nested_field(&row, "syn.z_score").and_then(as_f64);
-                let pli = get_nested_field(&row, "lof.pLI").and_then(as_f64);
-                let loeuf = oe_lof_upper;
-                let flags = get_field(&row, "constraint_flags").and_then(|v| {
-                    if let EncodedValue::Array(arr) = v {
-                        let strs: Vec<String> = arr.iter().filter_map(|a| a.as_string()).collect();
-                        if strs.is_empty() { None } else { Some(strs) }
-                    } else {
-                        None
+        // Load constraint metrics in the background if a path is provided. The
+        // constraint scan (974 partitions over GCS, ~100s) previously ran
+        // synchronously here, holding the port closed for the full boot. Now we
+        // bind immediately and fill the map in on a detached thread; genes
+        // served before it's ready simply come back with `constraint: None`.
+        let constraint_map: Arc<RwLock<HashMap<String, GeneConstraint>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        if let Some(cp) = constraint_path {
+            let cp = cp.to_string();
+            let target = Arc::clone(&constraint_map);
+            std::thread::spawn(move || {
+                info!("Loading constraint metrics from {} (background)", cp);
+                match load_constraint_map(&cp) {
+                    Ok(map) => {
+                        let n = map.len();
+                        match target.write() {
+                            Ok(mut guard) => *guard = map,
+                            Err(e) => {
+                                warn!("Constraint map lock poisoned, skipping: {}", e);
+                                return;
+                            }
+                        }
+                        info!("Loaded constraint metrics for {} genes (background)", n);
                     }
-                });
-                map.insert(gene_id, GeneConstraint {
-                    exp_lof, exp_mis, exp_syn,
-                    obs_lof, obs_mis, obs_syn,
-                    oe_lof, oe_lof_lower, oe_lof_upper,
-                    oe_mis, oe_mis_lower, oe_mis_upper,
-                    oe_syn, oe_syn_lower, oe_syn_upper,
-                    lof_z, mis_z, syn_z,
-                    pli, loeuf, flags,
-                });
-            }
-            info!("Loaded constraint metrics for {} genes", map.len());
-            map
-        } else {
-            HashMap::new()
-        };
+                    Err(e) => warn!("Failed to load constraint metrics (constraint panel will be empty): {:#}", e),
+                }
+            });
+        }
 
         Ok(Self {
             variants_engine: Arc::new(variants_engine),
             genes_engine: Arc::new(RwLock::new(genes_engine)),
             symbol_to_gene_id: Arc::new(symbol_map),
-            constraint_map: Arc::new(constraint_map),
+            constraint_map,
             variants_path: variants_path.to_string(),
         })
     }
@@ -823,7 +851,10 @@ impl VariantBackend for HailBackend {
                         Some(g) => g,
                         None => return Ok(None),
                     };
-                    gene.constraint = constraint_map.get(&gene.gene_id).cloned();
+                    gene.constraint = constraint_map
+                        .read()
+                        .ok()
+                        .and_then(|m| m.get(&gene.gene_id).cloned());
                     Ok(Some(gene))
                 }
                 None => Ok(None),

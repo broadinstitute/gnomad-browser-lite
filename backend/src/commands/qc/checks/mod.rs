@@ -4,4 +4,6 @@
 //! [`registry`](crate::commands::qc::framework::registry) with a single line.
 
 pub mod biallelic;
+pub mod complete_chromosomes;
+pub mod contigs_grch38;
 pub mod util;

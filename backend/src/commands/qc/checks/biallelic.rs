@@ -159,8 +159,10 @@ mod tests {
         assert_eq!(a.rows_scanned(), 4);
 
         let results = a.finalize(&ctx);
-        assert_eq!(results.len(), 1);
-        let r = &results[0];
+        let r = results
+            .iter()
+            .find(|r| r.id == "fields.biallelic")
+            .expect("biallelic result present");
         assert_eq!(r.id, "fields.biallelic");
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.n_violations, 1);

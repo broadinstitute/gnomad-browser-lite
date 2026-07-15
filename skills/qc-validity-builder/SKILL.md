@@ -48,13 +48,17 @@ the reviewable artifact of intent — the user should read and approve it before
 
 Using `references/checkstate-template.md`, produce a diff that:
 
-1. Adds a `CheckState::<Name>` variant with `process_row` / `merge` / `finalize`.
-2. Registers it in the check registry (id, name, tier, category, needs, plot type) so
-   `--checks` and `gbl qc list` pick it up.
+1. Adds a `checks/<name>.rs` module (a `pub const META` + a state struct + `impl Check` with
+   `process_row` / `merge` / `finalize`) and a `CheckState::<Name>` variant with its match arms.
+2. Registers it: `pub mod <name>;` in `checks/mod.rs` and a `registry()` entry (whose `META`
+   carries id/name/tier/category/description/needs) so `--checks` and `gbl qc list` pick it up.
+   A plot, if any, is attached to the `CheckResult` — it is **not** part of `CheckMeta`.
 3. Adds a **unit-test fixture**: a handful of synthetic rows asserting a PASS case and a
    FAIL/WARN case (per the spec's acceptance criteria). This is where the check proves
    correctness in isolation — inline `EncodedValue` rows, no files.
-4. Adds the `qc.toml` band key if the check has a configurable threshold.
+4. Inlines the threshold as a `const` for now. There is no `qc.toml` / `ScanContext::expectation`
+   plumbing yet (deferred — see `00-design-reference.md`); the check still reports the measured
+   value + an `expectation` JSON. Needing configurable bands *today* is a framework change — flag it.
 5. Adds **integration coverage** so the shared broken fixture trips the check: add a defect
    entry to `examples/federation/make_broken.py` and regenerate the manifest
    (`uv run examples/federation/make_broken.py` → `partner-broken.vcf.bgz` + `defects.json`).

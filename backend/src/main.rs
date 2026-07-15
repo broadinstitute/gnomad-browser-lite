@@ -282,6 +282,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Mcp(mcp_cmd)) => {
             return run_mcp(&cli, mcp_cmd).await;
         }
+        Some(Commands::Qc(qc_cmd)) => {
+            return commands::qc::run(qc_cmd).await;
+        }
         _ => {}
     }
 

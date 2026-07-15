@@ -44,3 +44,7 @@ tokio-stream = "0.1"
 async-stream = "0.3"
 # Interval tree for the tiered router's hot/cold region routing (Phase 1c).
 rust-lapper = "1.1"
+# Parallel fold/reduce for the `gbl qc` single-pass scan (mirrors genohype `summary`).
+rayon = "1.10"
+# RFC3339 `generated_at` timestamps in the qc report.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

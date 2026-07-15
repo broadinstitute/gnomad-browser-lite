@@ -159,6 +159,57 @@ pub enum Commands {
     /// Run the MCP (Model Context Protocol) server
     #[command(subcommand)]
     Mcp(McpCommands),
+
+    /// Federation QC: verify a partner's sites-only submission in a single pass
+    #[command(subcommand)]
+    Qc(QcCommands),
+}
+
+/// Exit-code policy for `gbl qc run`.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum FailOn {
+    /// Exit 1 only when a check FAILs (default)
+    #[default]
+    Fail,
+    /// Exit 1 when a check WARNs or FAILs
+    Warn,
+}
+
+/// `gbl qc` subcommands.
+#[derive(Subcommand, Debug)]
+pub enum QcCommands {
+    /// List available checks: id, tier, description, input dependency
+    List,
+
+    /// Run checks in a single pass over <source> and write a JSON report
+    Run {
+        /// Source: Hail table (.ht), VCF(.bgz), or Parquet (local, gs://, s3://)
+        source: String,
+
+        /// Comma-separated check ids to run. Default: all single-dataset checks
+        #[arg(long)]
+        checks: Option<String>,
+
+        /// Select whole tiers, e.g. --tier 1 or --tier 1,2
+        #[arg(long)]
+        tier: Option<String>,
+
+        /// Output path for the JSON report. Default: stdout
+        #[arg(long)]
+        out: Option<String>,
+
+        /// Failing-row examples retained per check
+        #[arg(long, default_value = "20")]
+        max_examples: usize,
+
+        /// Exit-code policy
+        #[arg(long, value_enum, default_value = "fail")]
+        fail_on: FailOn,
+
+        /// Expectation band set (wgs|exome). Default: wgs
+        #[arg(long)]
+        data_type: Option<String>,
+    },
 }
 
 /// MCP server transport subcommands.

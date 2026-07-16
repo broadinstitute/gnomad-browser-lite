@@ -52,7 +52,7 @@ OUT_BGZ = OUT_VCF + ".bgz"
 MANIFEST = os.path.join(HERE, "defects.json")
 
 # Karyotypic-ish contig order used only to keep the output coordinate-grouped.
-CONTIG_RANK = {"1": 0, "chr1": 1, "chr17": 2, "chr21": 3, "chr22": 4, "chrX": 5, "chrY": 6}
+CONTIG_RANK = {"1": 0, "chr1": 1, "chr17": 2, "chr21": 3, "chr22": 4, "chrX": 5, "chrY": 6, "GL000220.1": 7}
 
 
 def fmt_af(ac, an):
@@ -129,8 +129,9 @@ def transform_header(lines, drop_chry):
                 continue  # defect 8: chrY gone
             out.append(ln)
             if "ID=chr1," in ln:
-                # defect 2: declare the non-GRCh38 contig '1' we introduce.
+                # defect 2: declare the non-GRCh38 contigs we introduce.
                 out.append("##contig=<ID=1,length=249250621>\n")
+                out.append("##contig=<ID=GL000220.1,length=161802>\n")
         elif ln.startswith("##INFO") and "_nfe" in ln:
             out.append(ln.replace("_nfe", "_oth").replace(" nfe", " oth"))
         else:
@@ -187,13 +188,17 @@ def main():
             "note": note,
         })
 
-    # --- Defect 2: non-GRCh38 contig (chr1 -> 1) on 5 records ---
+    # --- Defect 2: non-GRCh38 contigs on 5 records — GRCh37-style '1' and the
+    #     unplaced hg19 contig 'GL000220.1' ---
     d2 = claim(st, records, chr1_idx, lambda r: True, N_PER_ARITH_DEFECT)
-    for i in d2:
+    for i in d2[0:3]:
         records[i].contig = "1"
+    for i in d2[3:5]:
+        records[i].contig = "GL000220.1"
     record_defect(2, "Non-GRCh38 contig", ["fields.contigs-grch38"], 1, d2,
-                  "CHROM relabeled chr1 -> 1 (GRCh37-style).")
-    # capture ids AFTER relabel so they match the broken file (contig '1')
+                  "CHROM relabeled to non-GRCh38 contigs: chr1 -> 1 (GRCh37-style, 3 "
+                  "rec) and chr1 -> GL000220.1 (unplaced, 2 rec).")
+    # capture ids AFTER relabel so they match the broken file (contigs '1'/'GL000220.1')
     defects[-1]["example_variant_ids"] = [records[i].vid() for i in d2[:MAX_EXAMPLES]]
 
     # --- Defect 3: missing required fields on 5 disjoint records, spanning the

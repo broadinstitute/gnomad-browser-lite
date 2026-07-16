@@ -34,7 +34,7 @@ use genohype_core::codec::EncodedValue;
 use genohype_core::genomic::get_field;              // + get_nested_field / as_i32 / as_f64 as needed
 use serde_json::json;
 
-use super::util::variant_id;                        // for bounded examples
+use super::util::{count_value, variant_id};         // variant_id: examples; count_value: AC/AN counts
 use crate::commands::qc::context::ScanContext;
 use crate::commands::qc::framework::{Check, CheckConfig, CheckMeta, CheckResult, Status};
 
@@ -73,9 +73,15 @@ impl <Name>State {
 impl Check for <Name>State {
     /// Fold one variant record. Allocation-free on the hot path where reasonable.
     fn process_row(&mut self, row: &EncodedValue, ctx: &ScanContext) {
-        // Read fields via extract helpers, e.g.:
+        // Sites-VCF layout: per-stratum counts are FLAT `info` fields, not a Hail
+        // `freq` array. Read them via get_field + iterate the struct, e.g.:
         //   if let Some(EncodedValue::Array(alleles)) = get_field(row, "alleles") { ... }
-        //   let (ac, an) = ctx.strata[..] locate the global freq slot (globals-dependent checks)
+        //   let Some(EncodedValue::Struct(info)) = get_field(row, "info") else { return };
+        //   for (key, value) in info { /* "AC"/"AC_<suffix>"/"AN"/... */ }
+        // Read AC/AN/nhomalt counts via count_value(value), NOT as_i32: a `Number=A`
+        // field (AC) is a one-element array that as_i32 returns None for -> silent pass.
+        // The freq_meta/freq_index_dict "globals" model is the FUTURE Hail path; on the
+        // current fixtures a `needs: ["globals"]` check may find nothing and pass on nothing.
         // On a violation:
         //   self.record_example(json!({ "variant_id": variant_id(row), /* offending values */ }));
     }
@@ -197,7 +203,10 @@ mod tests {
     }
 
     // Recommended: prove split-then-merge == whole via QcAccumulator, matching the
-    // scaffold's `accumulator_folds_merges_and_flags_multiallelic` test.
+    // scaffold's `accumulator_folds_merges_and_flags_multiallelic` test. `finalize`
+    // returns ALL selected checks' results — look yours up by id, never by index:
+    //   let r = results.iter().find(|r| r.id == META.id).expect("result present");
+    // Hard-coding results[0] / results.len() == 1 breaks when another check registers.
 }
 ```
 
@@ -231,8 +240,11 @@ with a reason instead. See `docs/spec/qc/05-fixtures-and-testing.md`.
 - [ ] `process_row` allocation-free; examples bounded by `max_examples` (via `record_example`).
 - [ ] `merge` associative + commutative.
 - [ ] Threshold inlined as a `const` (no `ctx.expectation` — not wired yet).
-- [ ] Unit test asserts PASS and FAIL/WARN; ideally split-then-merge == whole.
-- [ ] Broken-fixture defect added to `make_broken.py` (or a documented `clean_caveats` /
-      `--scenario`); `defects.json` regenerated.
+- [ ] AC/AN/nhomalt counts read via `count_value`, not `as_i32` (no `Number=A` false-pass).
+- [ ] Unit test asserts PASS and FAIL/WARN; ideally split-then-merge == whole. Results looked
+      up by id (`find(|r| r.id == META.id)`), not index.
+- [ ] `defects.json` checked first: reuse an existing defect if one already trips the check;
+      otherwise add one to `make_broken.py` (or a documented `clean_caveats` / `--scenario`)
+      and regenerate `defects.json`.
 - [ ] No new dependencies; no scan-loop/framework-mechanism edits.
 - [ ] `cargo test` green; `cargo clippy` clean on the new file.

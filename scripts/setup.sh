@@ -82,6 +82,41 @@ fi
 
 cd "$PROJECT_ROOT"
 
+# Preflight: the backend and frontend depend on sibling repos by path
+# (backend/Cargo.toml -> ../../genohype/*, frontend/package.json -> ../../genohype/ui,
+# and optional ../../fastVEP/crates/* which Cargo resolves even with `vep` off).
+# Fail loud with the fix instead of the cryptic path-resolution error a missing
+# sibling (or the wrong fastVEP branch) produces.
+preflight_siblings() {
+    local parent missing=0
+    parent="$(cd "$PROJECT_ROOT/.." && pwd)"
+
+    if [[ ! -d "$parent/genohype/core" ]]; then
+        echo "  MISSING: $parent/genohype  (backend crates + frontend assistant-ui)"
+        echo "    git clone ssh://git@github.com/broadinstitute/genohype.git \"$parent/genohype\""
+        missing=1
+    fi
+    # fastVEP must be the integration fork/branch: the upstream Huang-lab default
+    # branch lacks fastvep-loftee and Cargo will fail to resolve the optional dep.
+    if [[ ! -f "$parent/fastVEP/crates/fastvep-loftee/Cargo.toml" ]]; then
+        echo "  MISSING: $parent/fastVEP  (needs the fastvep-loftee crate)"
+        echo "    git clone ssh://git@github.com/mattsolo1/fastVEP.git \"$parent/fastVEP\""
+        echo "    (cd \"$parent/fastVEP\" && git checkout genohype-integration)"
+        missing=1
+    fi
+
+    if [[ "$missing" == "1" ]]; then
+        echo ""
+        echo "ERROR: required sibling repo(s) missing — clone them beside gnomad-browser-lite"
+        echo "       and re-run setup. See docs/qc-methods-team-onboarding.md §0."
+        exit 1
+    fi
+    echo "  Sibling repos OK: genohype, fastVEP"
+}
+
+echo "Checking sibling repos..."
+preflight_siblings
+
 if [[ -n "$WORKTREE_NAME" ]]; then
     echo "Setting up worktree: $WORKTREE_NAME"
 else
@@ -129,8 +164,27 @@ fi
 
 # Build backend
 if [[ "$SKIP_BUILD" != "true" ]]; then
+    # sccache is the configured rustc wrapper (backend/.cargo/config.toml). If it
+    # isn't installed, every cargo command fails cryptically — unset the wrapper so
+    # the build works anyway (install sccache to get cross-worktree caching back).
+    if ! command -v sccache &>/dev/null; then
+        echo "sccache not found — building without it (set up sccache for faster rebuilds)"
+        export CARGO_BUILD_RUSTC_WRAPPER=""
+    fi
+
+    # assistant-ui ships source-only; build it before the frontend install or that
+    # install fails on the `file:` dependency.
+    PARENT="$(cd "$PROJECT_ROOT/.." && pwd)"
+    if [[ -d "$PARENT/genohype/ui" ]]; then
+        echo ""
+        echo "Building @genohype/assistant-ui..."
+        (cd "$PARENT/genohype/ui" && npm install && npm run build -w @genohype/assistant-ui)
+    fi
+
     echo ""
     echo "Building backend..."
+    # The binary links DuckDB (a legacy backend) at build time via the system
+    # library. If you have no system DuckDB, build with --features bundled instead.
     (cd backend && cargo build --release)
 
     echo ""

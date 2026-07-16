@@ -118,6 +118,13 @@ enum CheckState { /* one variant per check: process_row + merge + finalize */ }
 
 ## Data access (genohype-core)
 
+> **The fixtures are sites-only VCFs.** Per-stratum counts are flat `info` fields (`AC`, `AN`,
+> `nhomalt`, `AC_<suffix>`, …), read via `get_field(row, "info")`, and most checks declare
+> `needs: &[]`. Read count fields through `checks::util::count_value`, not `as_i32`: a `Number=A`
+> field (`AC`) is a one-element array `as_i32` returns `None` for. The `freq`-array / `freq_meta`
+> / `freq_index_dict` "globals" model below is the target Hail-native path; a check written
+> against it finds nothing in the current fixtures.
+
 - Rows are `EncodedValue` (`core/src/codec/encoded_type.rs`): `Struct`, `Array`, ints, floats,
   `Binary`, `Boolean`, `Null`.
 - Field access via `core/src/genomic/extract.rs`: `get_field`, `get_field_any` (case/alias

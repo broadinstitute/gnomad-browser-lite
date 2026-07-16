@@ -25,6 +25,11 @@ lowest-effort checks and the ideal way to learn the framework.
 (`fields.biallelic` already shipped in `01`. `complete.filter-pass-ratio` is reference-dependent
 — defer to the reference-checks PR.)
 
+> The `globals` entries in the `needs` column describe the target Hail-native
+> `freq_meta`/`freq_index_dict` path. On the current sites-only fixtures, checks read the flat
+> `info` fields and declare `needs: &[]`; read `AC`/`AN`/`nhomalt` via `util::count_value`. See
+> `00-design-reference.md` → *Data access*.
+
 ## Reuse
 
 - `fields.required` / `fields.contigs-grch38` should run through **`SchemaValidator`**

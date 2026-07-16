@@ -37,13 +37,47 @@ as benchmark backends; `hail` and `duckdb` are the two you'll use for local dev.
 ## Prerequisites
 
 - Rust (stable) — `cargo`, and optionally [`cargo-watch`](https://crates.io/crates/cargo-watch) for backend hot reload
+- sccache — caches Rust build artifacts so rebuilds are fast (`cargo install sccache`)
+- A DuckDB library — the binary links it at build time (`brew install duckdb`, or build with `--features bundled` to compile it from source; see [Development](#development))
 - Node.js 20.19+ (or 22.12+) and `pnpm`
+- **Sibling repos:** the backend and frontend depend on the `genohype` and `fastVEP` repos **by path** — see [Repository layout](#repository-layout) before your first build.
 - **For the default `hail` backend:** the [gcloud CLI](https://cloud.google.com/sdk/docs/install) with Application Default Credentials —
   ```bash
   gcloud auth application-default login
   ```
   The gnomAD buckets are public, but the GCS client still mints an OAuth token, so ADC must be present.
-- **For the `duckdb` backend only:** the DuckDB system library (`brew install duckdb`) and, to export data, the [`hail-decoder`](https://github.com/broadinstitute/hail-rust-decoder) CLI.
+- **To export `duckdb` data:** the [`hail-decoder`](https://github.com/broadinstitute/hail-rust-decoder) CLI.
+
+## Repository layout
+
+`gnomad-browser-lite` is not standalone — it references two sibling repos **by path**
+(`backend/Cargo.toml` → `../../genohype/*`; `frontend/package.json` →
+`file:../../genohype/ui/...`; optional VEP deps → `../../fastVEP/crates/*`, which Cargo
+resolves even with the `vep` feature off). Clone all three **side by side**:
+
+```bash
+mkdir genohype-eco && cd genohype-eco
+git clone ssh://git@github.com/broadinstitute/gnomad-browser-lite.git
+git clone ssh://git@github.com/broadinstitute/genohype.git             # branch: main
+git clone ssh://git@github.com/mattsolo1/fastVEP.git                   # NOT upstream Huang-lab
+(cd fastVEP && git checkout genohype-integration)                     # has the fastvep-loftee crate
+```
+
+```
+genohype-eco/
+  gnomad-browser-lite/   ← build here
+  genohype/              (main)                 — core/pool/mcp crates + ui/
+  fastVEP/               (genohype-integration) — fastvep-{core,io,annotate,loftee}
+```
+
+`@genohype/assistant-ui` ships source-only, so build it once before the frontend install:
+
+```bash
+(cd genohype/ui && npm install && npm run build -w @genohype/assistant-ui)
+```
+
+`./scripts/setup.sh` runs a preflight that checks for these siblings (and builds
+assistant-ui) and stops with the exact commands if anything is missing.
 
 ## Quick start (zero-config, public gnomAD data)
 
@@ -213,6 +247,11 @@ gnomad-browser-lite/
 ```
 
 ## Development
+
+sccache is the committed rustc wrapper (`backend/.cargo/config.toml`); install it (see
+Prerequisites), or build without it by prefixing cargo commands with
+`CARGO_BUILD_RUSTC_WRAPPER=""`. The binary links DuckDB at build time via the system
+library; if you have no system DuckDB, add `--features bundled` to compile it from source.
 
 ```bash
 # Backend

@@ -12,6 +12,12 @@ frontend/dist/
 # Environment
 .env
 
+# QC report output (`gbl qc run --out report.json`)
+report.json
+
+# Code-review scratch
+.code_review/
+
 # IDE
 .idea/
 .vscode/

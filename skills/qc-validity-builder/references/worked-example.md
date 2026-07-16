@@ -113,6 +113,9 @@ expected, not a regression.) A brand-new check would add its own defect entry he
 > set `{A↔G, C↔T}` and the WGS band `2.0–2.1` — those are the science. To verify:
 > `cargo test`, then `gbl qc list` (you'll see `bio.titv`), then
 > `gbl qc run examples/federation/partner-clean.vcf.bgz --checks bio.titv --out r.json`, and
-> open `/qc` — the Ti/Tv card lights up with the bar plot."
+> `uv run examples/federation/run_checks.py` — the `bio.titv` line flips from SKIP to a verdict."
+
+(The `/qc` page does not yet show a newly registered check — `/api/qc-report` isn't built,
+so the page renders a static sample. `run_checks.py` is the end-to-end signal, not the UI.)
 
 Note the scope discipline: one check, one spec, one PR, no framework changes.

@@ -1,12 +1,16 @@
 {
   "schema_version": "1",
   "source": "examples/federation/partner-broken.vcf.bgz",
-  "dataset_id": "partner-broken-demo",
+  "dataset_id": null,
   "reference_genome": "GRCh38",
   "data_type": "wgs",
-  "generated_at": "2026-07-14T15:10:00Z",
-  "rows_scanned": 128442,
-  "summary": { "pass": 1, "warn": 0, "fail": 3 },
+  "generated_at": "2026-07-16T15:12:28Z",
+  "rows_scanned": 129340,
+  "summary": {
+    "pass": 2,
+    "warn": 0,
+    "fail": 4
+  },
   "checks": [
     {
       "id": "fields.biallelic",
@@ -14,27 +18,102 @@
       "tier": 1,
       "category": "schema",
       "status": "pass",
-      "metric": { "n_violations": 0, "n_sites": 128442 },
-      "message": "All 128,442 sites are biallelic.",
+      "metric": {
+        "n_violations": 0
+      },
+      "message": "All records are biallelic.",
       "n_violations": 0,
       "examples": [],
-      "expectation": { "rule": "len(alleles) == 2 for every site" },
+      "expectation": {
+        "rule": "len(alleles) == 2 for every row"
+      },
       "plot": null,
       "needs": []
     },
     {
-      "id": "fields.required",
-      "name": "Required fields present",
+      "id": "fields.contigs-grch38",
+      "name": "GRCh38 contigs only",
       "tier": 1,
       "category": "schema",
       "status": "fail",
-      "metric": { "n_violations": 1, "missing_fields": ["nhomalt"] },
-      "message": "Required field 'nhomalt' is absent from the freq schema.",
-      "n_violations": 1,
+      "metric": {
+        "invalid_contigs": [
+          "1",
+          "GL000220.1"
+        ],
+        "n_violations": 5
+      },
+      "message": "5 site(s) on 2 contig(s) not in the GRCh38 primary assembly.",
+      "n_violations": 5,
       "examples": [
-        { "missing_field": "nhomalt", "location": "freq[].nhomalt", "note": "not present in any stratum" }
+        {
+          "contig": "1",
+          "note": "GRCh37-style contig name",
+          "variant_id": "1-55039020-T-C"
+        },
+        {
+          "contig": "1",
+          "note": "GRCh37-style contig name",
+          "variant_id": "1-55039027-G-T"
+        },
+        {
+          "contig": "1",
+          "note": "GRCh37-style contig name",
+          "variant_id": "1-55039029-A-G"
+        },
+        {
+          "contig": "GL000220.1",
+          "note": "unplaced or alt contig",
+          "variant_id": "GL000220.1-55039047-A-C"
+        },
+        {
+          "contig": "GL000220.1",
+          "note": "unplaced or alt contig",
+          "variant_id": "GL000220.1-55039048-A-C"
+        }
       ],
-      "expectation": { "rule": "AC, AN, nhomalt + per-ancestry/per-sex strata present" },
+      "expectation": {
+        "rule": "every locus.contig in the GRCh38 primary-assembly enum"
+      },
+      "plot": null,
+      "needs": []
+    },
+    {
+      "id": "complete.chromosomes",
+      "name": "All GRCh38 chromosomes present",
+      "tier": 1,
+      "category": "completeness",
+      "status": "fail",
+      "metric": {
+        "missing_contigs": [
+          "chr2",
+          "chr3",
+          "chr4",
+          "chr5",
+          "chr6",
+          "chr7",
+          "chr8",
+          "chr9",
+          "chr10",
+          "chr11",
+          "chr12",
+          "chr13",
+          "chr14",
+          "chr15",
+          "chr16",
+          "chr18",
+          "chr19",
+          "chr20",
+          "chrY"
+        ],
+        "n_missing": 19
+      },
+      "message": "19 expected chromosome(s) absent: chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10, chr11, chr12, chr13, chr14, chr15, chr16, chr18, chr19, chr20, chrY.",
+      "n_violations": 19,
+      "examples": [],
+      "expectation": {
+        "rule": "every expected GRCh38 chromosome (chr1..22, chrX, chrY) is present"
+      },
       "plot": null,
       "needs": []
     },
@@ -44,33 +123,154 @@
       "tier": 1,
       "category": "schema",
       "status": "fail",
-      "metric": { "n_violations": 2, "retired_terms": ["oth", "pop"] },
-      "message": "2 retired ancestry labels found in freq_meta: 'oth', 'pop'.",
-      "n_violations": 2,
+      "metric": {
+        "n_violations": 12,
+        "retired_terms": [
+          "oth"
+        ]
+      },
+      "message": "Retired terminology (oth) in 12 field(s)/label(s).",
+      "n_violations": 12,
       "examples": [
-        { "term": "oth", "location": "freq_meta[7].pop", "replacement": "remove" },
-        { "term": "pop", "location": "freq_meta[7].group", "replacement": "gen_anc" }
+        {
+          "field": "AC_oth",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AC_oth_XX",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AC_oth_XY",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AF_oth",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AF_oth_XX",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AF_oth_XY",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AN_oth",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AN_oth_XX",
+          "retired_term": "oth"
+        },
+        {
+          "field": "AN_oth_XY",
+          "retired_term": "oth"
+        },
+        {
+          "field": "nhomalt_oth",
+          "retired_term": "oth"
+        },
+        {
+          "field": "nhomalt_oth_XX",
+          "retired_term": "oth"
+        },
+        {
+          "field": "nhomalt_oth_XY",
+          "retired_term": "oth"
+        }
       ],
-      "expectation": { "rule": "reject oth, other, pop, population in freq_meta/globals" },
+      "expectation": {
+        "rule": "no retired labels (oth, other, pop, population) in field names or freq_meta"
+      },
       "plot": null,
-      "needs": ["globals"]
+      "needs": []
     },
     {
-      "id": "fields.contigs-grch38",
-      "name": "GRCh38 contigs only",
+      "id": "fields.required",
+      "name": "Required fields present",
       "tier": 1,
       "category": "schema",
       "status": "fail",
-      "metric": { "n_violations": 314, "invalid_contigs": ["1", "GL000220.1"] },
-      "message": "314 sites are on 2 contigs not in the GRCh38 primary assembly.",
-      "n_violations": 314,
+      "metric": {
+        "missing_fields": [
+          "AC_XY",
+          "AC_amr",
+          "AN_XY",
+          "AN_amr",
+          "nhomalt",
+          "nhomalt_XY",
+          "nhomalt_amr"
+        ],
+        "n_violations": 5
+      },
+      "message": "5 row(s) missing required field(s): AC_XY, AC_amr, AN_XY, AN_amr, nhomalt, nhomalt_XY, nhomalt_amr.",
+      "n_violations": 5,
       "examples": [
-        { "variant_id": "1-909238-C-T", "contig": "1", "note": "GRCh37-style contig name" },
-        { "variant_id": "GL000220.1-112-A-G", "contig": "GL000220.1", "note": "unplaced contig" }
+        {
+          "missing": [
+            "nhomalt"
+          ],
+          "variant_id": "chr1-55039051-A-G"
+        },
+        {
+          "missing": [
+            "nhomalt"
+          ],
+          "variant_id": "chr1-55039055-A-C"
+        },
+        {
+          "missing": [
+            "AC_amr",
+            "AN_amr",
+            "nhomalt_amr"
+          ],
+          "variant_id": "chr1-55039069-G-A"
+        },
+        {
+          "missing": [
+            "AC_amr",
+            "AN_amr",
+            "nhomalt_amr"
+          ],
+          "variant_id": "chr1-55039070-C-G"
+        },
+        {
+          "missing": [
+            "AC_XY",
+            "AN_XY",
+            "nhomalt_XY"
+          ],
+          "variant_id": "chr1-55039079-G-A"
+        }
       ],
-      "expectation": { "rule": "every locus.contig in the GRCh38 primary-assembly enum" },
+      "expectation": {
+        "rule": "AC, AN, nhomalt present per row: global, per genetic-ancestry group, and per sex karyotype (including ancestry×sex)"
+      },
       "plot": null,
       "needs": []
+    },
+    {
+      "id": "fields.freq-index-dict",
+      "name": "freq_index_dict well-formed",
+      "tier": 1,
+      "category": "schema",
+      "status": "pass",
+      "metric": {
+        "issues": [],
+        "n_violations": 0
+      },
+      "message": "freq_index_dict absent (flat sites submission); not applicable.",
+      "n_violations": 0,
+      "examples": [],
+      "expectation": {
+        "rule": "freq_index_dict keys formatted [downsampling_]gen_anc_sex_group; adj at index 0, raw at index 1"
+      },
+      "plot": null,
+      "needs": [
+        "globals"
+      ]
     }
   ]
 }

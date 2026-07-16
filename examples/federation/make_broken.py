@@ -196,14 +196,26 @@ def main():
     # capture ids AFTER relabel so they match the broken file (contig '1')
     defects[-1]["example_variant_ids"] = [records[i].vid() for i in d2[:MAX_EXAMPLES]]
 
-    # --- Defect 3: missing required field (drop global nhomalt) on 5 records ---
+    # --- Defect 3: missing required fields on 5 disjoint records, spanning the
+    #     three required-field categories: a global field, a genetic-ancestry
+    #     group's counts, and a sex-karyotype's counts ---
     d3 = claim(st, records, chr1_idx, lambda r: True, N_PER_ARITH_DEFECT)
-    for i in d3:
-        r = records[i]
-        r.keys = [k for k in r.keys if k != "nhomalt"]
-        r.info.pop("nhomalt", None)
+
+    def drop_keys(rec, drop):
+        drop = set(drop)
+        rec.keys = [k for k in rec.keys if k not in drop]
+        for k in drop:
+            rec.info.pop(k, None)
+
+    for i in d3[0:2]:
+        drop_keys(records[i], ["nhomalt"])  # global
+    for i in d3[2:4]:
+        drop_keys(records[i], ["AC_amr", "AN_amr", "nhomalt_amr"])  # gen-anc group amr
+    for i in d3[4:5]:
+        drop_keys(records[i], ["AC_XY", "AN_XY", "nhomalt_XY"])  # sex karyotype XY
     record_defect(3, "Missing required field", ["fields.required"], 1, d3,
-                  "Global nhomalt INFO key removed.")
+                  "Required INFO keys removed on disjoint records: global nhomalt (2), "
+                  "genetic-ancestry group amr counts (2), sex-karyotype XY counts (1).")
 
     # --- Defect 4: AC > AN on 5 records (only arith.ac-le-an) ---
     d4 = claim(st, records, chr1_idx, lambda r: True, N_PER_ARITH_DEFECT)

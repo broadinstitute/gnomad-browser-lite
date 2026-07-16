@@ -83,7 +83,7 @@
         "1-55039070-C-G",
         "1-55039079-G-A"
       ],
-      "note": "Global nhomalt INFO key removed."
+      "note": "Required INFO keys removed on disjoint records: global nhomalt (2), genetic-ancestry group amr counts (2), sex-karyotype XY counts (1)."
     },
     {
       "defect": 4,

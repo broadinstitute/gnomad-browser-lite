@@ -11,6 +11,7 @@
 use genohype_core::codec::EncodedValue;
 use serde::{Deserialize, Serialize};
 
+use super::checks::ac_le_an::{self, AcLeAnState};
 use super::checks::biallelic::{self, BiallelicState};
 use super::checks::complete_chromosomes::{self, CompleteChromosomesState};
 use super::checks::contigs_grch38::{self, ContigsGrch38State};
@@ -109,6 +110,10 @@ pub fn registry() -> Vec<RegistryEntry> {
             meta: freq_index_dict::META,
             construct: |cfg| CheckState::FreqIndexDict(FreqIndexDictState::new(cfg)),
         },
+        RegistryEntry {
+            meta: ac_le_an::META,
+            construct: |cfg| CheckState::AcLeAn(AcLeAnState::new(cfg)),
+        },
     ]
 }
 
@@ -136,6 +141,7 @@ pub enum CheckState {
     RetiredTerms(RetiredTermsState),
     RequiredFields(RequiredFieldsState),
     FreqIndexDict(FreqIndexDictState),
+    AcLeAn(AcLeAnState),
 }
 
 impl CheckState {
@@ -147,6 +153,7 @@ impl CheckState {
             CheckState::RetiredTerms(s) => s.process_row(row, ctx),
             CheckState::RequiredFields(s) => s.process_row(row, ctx),
             CheckState::FreqIndexDict(s) => s.process_row(row, ctx),
+            CheckState::AcLeAn(s) => s.process_row(row, ctx),
         }
     }
 
@@ -158,6 +165,7 @@ impl CheckState {
             (CheckState::RetiredTerms(a), CheckState::RetiredTerms(b)) => a.merge(b),
             (CheckState::RequiredFields(a), CheckState::RequiredFields(b)) => a.merge(b),
             (CheckState::FreqIndexDict(a), CheckState::FreqIndexDict(b)) => a.merge(b),
+            (CheckState::AcLeAn(a), CheckState::AcLeAn(b)) => a.merge(b),
             _ => unreachable!("merge only ever combines like check states (same selection, same order)"),
         }
     }
@@ -170,6 +178,7 @@ impl CheckState {
             CheckState::RetiredTerms(s) => s.finalize(ctx),
             CheckState::RequiredFields(s) => s.finalize(ctx),
             CheckState::FreqIndexDict(s) => s.finalize(ctx),
+            CheckState::AcLeAn(s) => s.finalize(ctx),
         }
     }
 }

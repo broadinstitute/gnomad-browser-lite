@@ -33,6 +33,17 @@ git clone ssh://git@github.com/mattsolo1/fastVEP.git
 (cd fastVEP && git checkout genohype-integration)
 ```
 
+No SSH keys set up yet? The `ssh://` remotes fail before you've added a key to
+GitHub — use the HTTPS forms instead:
+
+```bash
+mkdir genohype-eco && cd genohype-eco
+git clone https://github.com/broadinstitute/gnomad-browser-lite.git
+git clone https://github.com/broadinstitute/genohype.git
+git clone https://github.com/mattsolo1/fastVEP.git
+(cd fastVEP && git checkout genohype-integration)
+```
+
 Use `mattsolo1/fastVEP` on `genohype-integration`: the upstream default branch lacks
 the `fastvep-loftee` crate that Cargo resolves (it is an optional dependency, resolved
 even with the `vep` feature off). Resulting layout:

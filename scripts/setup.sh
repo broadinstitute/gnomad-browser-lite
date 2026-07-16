@@ -114,6 +114,37 @@ preflight_siblings() {
     echo "  Sibling repos OK: genohype, fastVEP"
 }
 
+# Preflight: the backend links a DuckDB library at build time (a legacy query
+# backend). On macOS the Homebrew lib dir is hard-wired in backend/.cargo/config.toml;
+# on Linux the system lib paths are searched. With no library present the build dies
+# with a cryptic linker error, so check up front and fail loud with the fix — same as
+# the sibling-repo check above. (`--features bundled` compiles DuckDB from source and
+# needs no system library; see docs Prerequisites.)
+preflight_duckdb() {
+    local found=""
+    # nullglob so unmatched patterns disappear instead of surviving literally (a plain
+    # `ls a b` returns non-zero if ANY arg is missing, which false-negatives here).
+    shopt -s nullglob
+    local libs=(
+        /opt/homebrew/opt/duckdb/lib/libduckdb.* /opt/homebrew/lib/libduckdb.*
+        /usr/local/opt/duckdb/lib/libduckdb.*    /usr/local/lib/libduckdb.*
+        /usr/lib/libduckdb.*                     /usr/lib/*/libduckdb.*
+    )
+    shopt -u nullglob
+    (( ${#libs[@]} > 0 )) && found="${libs[0]}"
+
+    if [[ -z "$found" ]]; then
+        echo "  MISSING: DuckDB library (the backend links it at build time)"
+        echo "    brew install duckdb        # macOS"
+        echo "    (or build without a system library: add --features bundled)"
+        echo ""
+        echo "ERROR: no DuckDB library found — install it (or use --features bundled)"
+        echo "       and re-run setup. See docs/qc-methods-team-onboarding.md Prerequisites."
+        exit 1
+    fi
+    echo "  DuckDB library OK: $found"
+}
+
 echo "Checking sibling repos..."
 preflight_siblings
 
@@ -180,6 +211,10 @@ if [[ "$SKIP_BUILD" != "true" ]]; then
         echo "Building @genohype/assistant-ui..."
         (cd "$PARENT/genohype/ui" && npm install && npm run build -w @genohype/assistant-ui)
     fi
+
+    echo ""
+    echo "Checking DuckDB library..."
+    preflight_duckdb
 
     echo ""
     echo "Building backend..."

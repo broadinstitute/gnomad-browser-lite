@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use super::checks::biallelic::{self, BiallelicState};
 use super::checks::complete_chromosomes::{self, CompleteChromosomesState};
 use super::checks::contigs_grch38::{self, ContigsGrch38State};
+use super::checks::freq_index_dict::{self, FreqIndexDictState};
+use super::checks::required_fields::{self, RequiredFieldsState};
 use super::checks::retired_terms::{self, RetiredTermsState};
 use super::context::ScanContext;
 
@@ -99,6 +101,14 @@ pub fn registry() -> Vec<RegistryEntry> {
             meta: retired_terms::META,
             construct: |cfg| CheckState::RetiredTerms(RetiredTermsState::new(cfg)),
         },
+        RegistryEntry {
+            meta: required_fields::META,
+            construct: |cfg| CheckState::RequiredFields(RequiredFieldsState::new(cfg)),
+        },
+        RegistryEntry {
+            meta: freq_index_dict::META,
+            construct: |cfg| CheckState::FreqIndexDict(FreqIndexDictState::new(cfg)),
+        },
     ]
 }
 
@@ -124,6 +134,8 @@ pub enum CheckState {
     ContigsGrch38(ContigsGrch38State),
     CompleteChromosomes(CompleteChromosomesState),
     RetiredTerms(RetiredTermsState),
+    RequiredFields(RequiredFieldsState),
+    FreqIndexDict(FreqIndexDictState),
 }
 
 impl CheckState {
@@ -133,6 +145,8 @@ impl CheckState {
             CheckState::ContigsGrch38(s) => s.process_row(row, ctx),
             CheckState::CompleteChromosomes(s) => s.process_row(row, ctx),
             CheckState::RetiredTerms(s) => s.process_row(row, ctx),
+            CheckState::RequiredFields(s) => s.process_row(row, ctx),
+            CheckState::FreqIndexDict(s) => s.process_row(row, ctx),
         }
     }
 
@@ -142,6 +156,8 @@ impl CheckState {
             (CheckState::ContigsGrch38(a), CheckState::ContigsGrch38(b)) => a.merge(b),
             (CheckState::CompleteChromosomes(a), CheckState::CompleteChromosomes(b)) => a.merge(b),
             (CheckState::RetiredTerms(a), CheckState::RetiredTerms(b)) => a.merge(b),
+            (CheckState::RequiredFields(a), CheckState::RequiredFields(b)) => a.merge(b),
+            (CheckState::FreqIndexDict(a), CheckState::FreqIndexDict(b)) => a.merge(b),
             _ => unreachable!("merge only ever combines like check states (same selection, same order)"),
         }
     }
@@ -152,6 +168,8 @@ impl CheckState {
             CheckState::ContigsGrch38(s) => s.finalize(ctx),
             CheckState::CompleteChromosomes(s) => s.finalize(ctx),
             CheckState::RetiredTerms(s) => s.finalize(ctx),
+            CheckState::RequiredFields(s) => s.finalize(ctx),
+            CheckState::FreqIndexDict(s) => s.finalize(ctx),
         }
     }
 }

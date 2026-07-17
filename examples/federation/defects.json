@@ -31,8 +31,8 @@
         "1-55039020-T-C",
         "1-55039027-G-T",
         "1-55039029-A-G",
-        "1-55039047-A-C",
-        "1-55039048-A-C",
+        "GL000220.1-55039047-A-C",
+        "GL000220.1-55039048-A-C",
         "1-55039051-A-G",
         "1-55039055-A-C",
         "1-55039069-G-A",
@@ -63,10 +63,10 @@
         "1-55039020-T-C",
         "1-55039027-G-T",
         "1-55039029-A-G",
-        "1-55039047-A-C",
-        "1-55039048-A-C"
+        "GL000220.1-55039047-A-C",
+        "GL000220.1-55039048-A-C"
       ],
-      "note": "CHROM relabeled chr1 -> 1 (GRCh37-style)."
+      "note": "CHROM relabeled to non-GRCh38 contigs: chr1 -> 1 (GRCh37-style, 3 rec) and chr1 -> GL000220.1 (unplaced, 2 rec)."
     },
     {
       "defect": 3,
@@ -83,7 +83,7 @@
         "1-55039070-C-G",
         "1-55039079-G-A"
       ],
-      "note": "Global nhomalt INFO key removed."
+      "note": "Required INFO keys removed on disjoint records: global nhomalt (2), genetic-ancestry group amr counts (2), sex-karyotype XY counts (1)."
     },
     {
       "defect": 4,

@@ -9,7 +9,8 @@ Full derivation: `docs/spec/qc/00-design-reference.md`.
 | id | logic | needs | gnomad_methods |
 |----|-------|-------|----------------|
 | `fields.required` | AC, AN, nhomalt, per-ancestry + per-sex strata present | — | SchemaValidator |
-| `fields.retired-terms` | reject `oth`,`other`,`pop`,`population` in freq_meta/globals | globals | `check_globals_for_retired_terms` |
+| `fields.retired-terms` | reject `oth`,`other`,`pop`,`population` in freq_meta/globals | — | `check_globals_for_retired_terms` |
+| `fields.freq-index-dict` | `freq_index_dict` keys `[downsampling_]gen_anc_sex_group`; `adj`@0, `raw`@1; ≥1 gen_anc-shaped key | globals | [v4-hts freq_index_dict spec](https://gnomad.broadinstitute.org/help/v4-hts) |
 | `fields.contigs-grch38` | every `locus.contig` in GRCh38 enum | — | schema enum |
 | `fields.biallelic` | `len(alleles)==2` (shipped in scaffold) | — | — |
 | `arith.ac-le-an` | flag `AC>AN` or negative AC/AN per stratum | globals | callstats checks |

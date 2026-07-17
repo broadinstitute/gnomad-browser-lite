@@ -61,6 +61,8 @@ const MetaRow = styled.div`
 `;
 
 const MetaItem = styled.span`
+  min-width: 0;
+  overflow-wrap: anywhere;
   strong {
     color: #333;
     font-weight: 600;
@@ -146,6 +148,8 @@ function TIER_ACCENT(pending: boolean, status: string | undefined): string {
 
 function formatValue(v: unknown): string {
   if (v == null) return '—';
+  if (Array.isArray(v))
+    return v.map((x) => (typeof x === 'object' ? JSON.stringify(x) : String(x))).join(', ');
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }

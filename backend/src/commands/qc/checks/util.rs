@@ -27,3 +27,42 @@ pub fn variant_id(row: &EncodedValue) -> String {
 
     format!("{}-{}-{}-{}", contig, position, ref_allele, alt_allele)
 }
+
+/// Read a count-like INFO value (`AC`/`AN`/`nhomalt`-family), returning the integer
+/// whether VCF encoded it as a scalar (`Number=1`, e.g. `AN`) or a one-element array
+/// (`Number=A` on a biallelic row, e.g. `AC`). Use this instead of `as_i32`, which
+/// matches only the scalar and returns `None` on the array form. A multi-element array
+/// (a true multiallelic `Number=A`) returns `None` — out of scope for the biallelic
+/// aggregate model, and left for the caller rather than collapsed to its first element.
+pub fn count_value(value: &EncodedValue) -> Option<i32> {
+    match value {
+        EncodedValue::Array(items) if items.len() == 1 => as_i32(&items[0]),
+        other => as_i32(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_value_reads_scalar_and_number_a() {
+        // `Number=1` (e.g. AN): plain scalar.
+        assert_eq!(count_value(&EncodedValue::Int32(120)), Some(120));
+        // `Number=A` on a biallelic row (e.g. AC): one-element array.
+        assert_eq!(
+            count_value(&EncodedValue::Array(vec![EncodedValue::Int32(7)])),
+            Some(7)
+        );
+        // The trap this helper exists to avoid: bare `as_i32` on that same array.
+        assert_eq!(as_i32(&EncodedValue::Array(vec![EncodedValue::Int32(7)])), None);
+        // Multiallelic `Number=A` is out of scope, not silently truncated.
+        assert_eq!(
+            count_value(&EncodedValue::Array(vec![
+                EncodedValue::Int32(7),
+                EncodedValue::Int32(3),
+            ])),
+            None
+        );
+    }
+}

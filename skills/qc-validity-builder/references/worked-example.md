@@ -110,9 +110,14 @@ expected, not a regression.) A brand-new check would add its own defect entry he
 ## Step 4 — hand back
 
 > "Here's `docs/spec/qc/05-titv.md` and the diff adding `bio.titv`. Please check the transition
-> set `{A↔G, C↔T}` and the WGS band `2.0–2.1` — those are the science. To verify:
-> `cargo test`, then `gbl qc list` (you'll see `bio.titv`), then
-> `gbl qc run examples/federation/partner-clean.vcf.bgz --checks bio.titv --out r.json`, and
-> open `/qc` — the Ti/Tv card lights up with the bar plot."
+> set `{A↔G, C↔T}` and the WGS band `2.0–2.1` — those are the science. To verify, from the
+> repo root with `export GBL="$PWD/backend/target/release/backend"` (the fixture verifier
+> reads `GBL`; a shell alias is invisible to its subprocess): `cargo test`, then
+> `"$GBL" qc list` (you'll see `bio.titv`), then
+> `"$GBL" qc run examples/federation/partner-clean.vcf.bgz --checks bio.titv --out r.json`, and
+> `uv run examples/federation/run_checks.py` — the `bio.titv` line flips from SKIP to a verdict."
+
+(The `/qc` page does not yet show a newly registered check — `/api/qc-report` isn't built,
+so the page renders a static sample. `run_checks.py` is the end-to-end signal, not the UI.)
 
 Note the scope discipline: one check, one spec, one PR, no framework changes.

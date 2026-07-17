@@ -46,6 +46,14 @@ the reviewable artifact of intent — the user should read and approve it before
 
 ## Step 3: Scaffold the Rust (the diff)
 
+**Data model.** The fixtures are sites-only VCFs: per-stratum counts are flat `info`
+fields (`AC`, `AN`, `nhomalt`, `AC_<suffix>`, …), read via `get_field(row, "info")`, and
+most checks declare `needs: &[]`. Read `AC`/`AN`/`nhomalt` counts through
+`util::count_value`, not `as_i32` — a `Number=A` field (`AC`) is a one-element array that
+`as_i32` returns `None` for, which makes a check pass without flagging anything. The
+`freq` / `freq_meta` / `globals` model in the spec is the future Hail-native path; a check
+written against it finds nothing in the fixtures.
+
 Using `references/checkstate-template.md`, produce a diff that:
 
 1. Adds a `checks/<name>.rs` module (a `pub const META` + a state struct + `impl Check` with
@@ -55,15 +63,19 @@ Using `references/checkstate-template.md`, produce a diff that:
    A plot, if any, is attached to the `CheckResult` — it is **not** part of `CheckMeta`.
 3. Adds a **unit-test fixture**: a handful of synthetic rows asserting a PASS case and a
    FAIL/WARN case (per the spec's acceptance criteria). This is where the check proves
-   correctness in isolation — inline `EncodedValue` rows, no files.
+   correctness in isolation — inline `EncodedValue` rows, no files. When a test folds rows
+   through `QcAccumulator`, `finalize` returns **all** selected checks' results — look yours
+   up **by id** (`results.iter().find(|r| r.id == META.id)`), never by index; hard-coding
+   `results[0]` / `results.len() == 1` breaks the moment another check is registered.
 4. Inlines the threshold as a `const` for now. There is no `qc.toml` / `ScanContext::expectation`
    plumbing yet (deferred — see `00-design-reference.md`); the check still reports the measured
    value + an `expectation` JSON. Needing configurable bands *today* is a framework change — flag it.
-5. Adds **integration coverage** so the shared broken fixture trips the check: add a defect
+5. Adds **integration coverage** so the shared broken fixture trips the check. Check
+   `examples/federation/defects.json` first — the broken fixture is an omnibus and may already
+   carry a defect your check targets; if so, reuse it and add nothing. Otherwise add a defect
    entry to `examples/federation/make_broken.py` and regenerate the manifest
    (`uv run examples/federation/make_broken.py` → `partner-broken.vcf.bgz` + `defects.json`).
-   Do **not** commit a new per-check VCF — the manifest is what lets one fixture serve every
-   check. If the check *should* pass on the clean fixture but can't because it's a small
+   Do **not** commit a new per-check VCF — the manifest lets one fixture serve every check. If the check *should* pass on the clean fixture but can't because it's a small
    regional subset (e.g. a genome-completeness check), add it to `clean_caveats` with a reason
    instead. Rare defects that need an incompatible global distribution go behind a
    `make_broken.py --scenario`. See `docs/spec/qc/05-fixtures-and-testing.md`.
@@ -76,6 +88,7 @@ allocation-free, `merge` associative and commutative.
 Present: the spec file, the diff, and how to verify —
 
 ```bash
+cargo build --release   # gbl below is target/release/backend
 cargo test              # the new unit fixture passes
 gbl qc list             # the new check appears
 gbl qc run examples/federation/partner-broken.vcf.bgz --checks <id> --out r.json
@@ -83,9 +96,10 @@ uv run examples/federation/run_checks.py   # both fixtures vs defects.json; your
                                            # flips from SKIP to a live verdict
 ```
 
-Then open `/qc`: the check's card flips from "Not yet implemented" to a live badge (+ plot).
-Tell the user exactly what to look at in the diff — especially the formula and the band — since
-that's the substance only they can validate.
+The end-to-end signal for a check is `run_checks.py`, not the UI: `/api/qc-report` is
+not built, so `/qc` renders a static sample report and a newly registered check does not
+appear there. Do not edit the sample report as part of a check PR. Point the user at the
+formula and the band in the diff — that is the substance only they can validate.
 
 ## Guardrails
 

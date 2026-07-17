@@ -58,7 +58,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Create worktree if requested
+# Resolve the project root (the worktree is created further down, AFTER the preflights,
+# so a missing sibling/DuckDB fails before we leave orphaned git state behind).
 if [[ -n "$WORKTREE_PATH" ]]; then
     # Convert to absolute path (works on macOS and Linux)
     if [[ "$WORKTREE_PATH" != /* ]]; then
@@ -66,18 +67,95 @@ if [[ -n "$WORKTREE_PATH" ]]; then
     fi
     WORKTREE_NAME="${WORKTREE_NAME:-$(basename "$WORKTREE_PATH")}"
     WORKTREE_BRANCH="${WORKTREE_BRANCH:-$WORKTREE_NAME}"
-
-    echo "Creating git worktree..."
-    echo "  Path: $WORKTREE_PATH"
-    echo "  Branch: $WORKTREE_BRANCH"
-    echo ""
-
-    cd "$MAIN_PROJECT"
-    git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_PATH"
-
     PROJECT_ROOT="$WORKTREE_PATH"
 else
     PROJECT_ROOT="$MAIN_PROJECT"
+fi
+
+# Preflight: the backend and frontend depend on sibling repos by path
+# (backend/Cargo.toml -> ../../genohype/*, frontend/package.json -> ../../genohype/ui,
+# and optional ../../fastVEP/crates/* which Cargo resolves even with `vep` off).
+# Fail loud with the fix instead of the cryptic path-resolution error a missing
+# sibling (or the wrong fastVEP branch) produces.
+preflight_siblings() {
+    local parent missing=0
+    # dirname (not "$PROJECT_ROOT/..") because this runs before the worktree leaf dir
+    # exists; the parent dir does exist, so cd+pwd there canonicalizes it.
+    parent="$(cd "$(dirname "$PROJECT_ROOT")" && pwd)"
+
+    if [[ ! -d "$parent/genohype/core" ]]; then
+        echo "  MISSING: $parent/genohype  (backend crates + frontend assistant-ui)"
+        echo "    git clone ssh://git@github.com/broadinstitute/genohype.git \"$parent/genohype\""
+        missing=1
+    fi
+    # fastVEP must be the integration fork/branch: the upstream Huang-lab default
+    # branch lacks fastvep-loftee and Cargo will fail to resolve the optional dep.
+    if [[ ! -f "$parent/fastVEP/crates/fastvep-loftee/Cargo.toml" ]]; then
+        echo "  MISSING: $parent/fastVEP  (needs the fastvep-loftee crate)"
+        echo "    git clone ssh://git@github.com/mattsolo1/fastVEP.git \"$parent/fastVEP\""
+        echo "    (cd \"$parent/fastVEP\" && git checkout genohype-integration)"
+        missing=1
+    fi
+
+    if [[ "$missing" == "1" ]]; then
+        echo ""
+        echo "ERROR: required sibling repo(s) missing — clone them beside gnomad-browser-lite"
+        echo "       and re-run setup. See docs/qc-methods-team-onboarding.md §0."
+        exit 1
+    fi
+    echo "  Sibling repos OK: genohype, fastVEP"
+}
+
+# Preflight: the backend links a DuckDB library at build time (a legacy query
+# backend). On macOS the Homebrew lib dir is hard-wired in backend/.cargo/config.toml;
+# on Linux the system lib paths are searched. With no library present the build dies
+# with a cryptic linker error, so check up front and fail loud with the fix — same as
+# the sibling-repo check above. (`--features bundled` compiles DuckDB from source and
+# needs no system library; see docs Prerequisites.)
+preflight_duckdb() {
+    local found=""
+    # nullglob so unmatched patterns disappear instead of surviving literally (a plain
+    # `ls a b` returns non-zero if ANY arg is missing, which false-negatives here).
+    shopt -s nullglob
+    local libs=(
+        /opt/homebrew/opt/duckdb/lib/libduckdb.* /opt/homebrew/lib/libduckdb.*
+        /usr/local/opt/duckdb/lib/libduckdb.*    /usr/local/lib/libduckdb.*
+        /usr/lib/libduckdb.*                     /usr/lib/*/libduckdb.*
+    )
+    shopt -u nullglob
+    (( ${#libs[@]} > 0 )) && found="${libs[0]}"
+
+    if [[ -z "$found" ]]; then
+        echo "  MISSING: DuckDB library (the backend links it at build time)"
+        echo "    brew install duckdb        # macOS"
+        echo "    (or build without a system library: add --features bundled)"
+        echo ""
+        echo "ERROR: no DuckDB library found — install it (or use --features bundled)"
+        echo "       and re-run setup. See docs/qc-methods-team-onboarding.md Prerequisites."
+        exit 1
+    fi
+    echo "  DuckDB library OK: $found"
+}
+
+# Run the preflights BEFORE creating the worktree so a missing sibling or DuckDB library
+# fails loud without leaving an orphaned worktree/branch behind.
+echo "Checking sibling repos..."
+preflight_siblings
+
+if [[ "$SKIP_BUILD" != "true" ]]; then
+    echo ""
+    echo "Checking DuckDB library..."
+    preflight_duckdb
+fi
+
+# Now safe to create the worktree.
+if [[ -n "$WORKTREE_PATH" ]]; then
+    echo ""
+    echo "Creating git worktree..."
+    echo "  Path: $WORKTREE_PATH"
+    echo "  Branch: $WORKTREE_BRANCH"
+    cd "$MAIN_PROJECT"
+    git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_PATH"
 fi
 
 cd "$PROJECT_ROOT"
@@ -129,8 +207,27 @@ fi
 
 # Build backend
 if [[ "$SKIP_BUILD" != "true" ]]; then
+    # sccache is the configured rustc wrapper (backend/.cargo/config.toml). If it
+    # isn't installed, every cargo command fails cryptically — unset the wrapper so
+    # the build works anyway (install sccache to get cross-worktree caching back).
+    if ! command -v sccache &>/dev/null; then
+        echo "sccache not found — building without it (set up sccache for faster rebuilds)"
+        export CARGO_BUILD_RUSTC_WRAPPER=""
+    fi
+
+    # assistant-ui ships source-only; build it before the frontend install or that
+    # install fails on the `file:` dependency.
+    PARENT="$(cd "$PROJECT_ROOT/.." && pwd)"
+    if [[ -d "$PARENT/genohype/ui" ]]; then
+        echo ""
+        echo "Building @genohype/assistant-ui..."
+        (cd "$PARENT/genohype/ui" && npm install && npm run build -w @genohype/assistant-ui)
+    fi
+
     echo ""
     echo "Building backend..."
+    # The binary links DuckDB (a legacy backend) at build time via the system
+    # library. If you have no system DuckDB, build with --features bundled instead.
     (cd backend && cargo build --release)
 
     echo ""

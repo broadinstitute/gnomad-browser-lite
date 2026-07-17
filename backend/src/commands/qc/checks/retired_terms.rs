@@ -21,6 +21,7 @@ pub const META: CheckMeta = CheckMeta {
     tier: 1,
     category: "schema",
     description: "No retired gnomAD labels (oth, other, pop, population) in field names or freq_meta.",
+    // Reads flat VCF INFO field names (and freq_meta when present); no hard globals dependency.
     needs: &[],
 };
 

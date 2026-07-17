@@ -16,7 +16,7 @@
 //! ancestry stratification exist at all — that roster calibration is deferred, as in
 //! gnomad_qc's config-driven necessity map.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use genohype_core::codec::EncodedValue;
 use genohype_core::genomic::get_field;
@@ -69,22 +69,9 @@ fn build_required(info_names: &[String]) -> Vec<String> {
     required
 }
 
-/// Resolve the required fields to their positions in the (uniform) info struct once, so the
-/// per-row check is a direct index lookup. `None` = the field isn't declared in the schema.
-fn resolve_schema(info: &[(String, EncodedValue)]) -> Vec<(String, Option<usize>)> {
-    let names: Vec<String> = info.iter().map(|(n, _)| n.clone()).collect();
-    build_required(&names)
-        .into_iter()
-        .map(|field| {
-            let idx = info.iter().position(|(n, _)| *n == field);
-            (field, idx)
-        })
-        .collect()
-}
-
 pub struct RequiredFieldsState {
-    /// Required fields resolved to indices, computed once from the first row's schema.
-    schema: Option<Vec<(String, Option<usize>)>>,
+    /// Required field names, resolved once from the first row's schema.
+    required: Option<Vec<String>>,
     n_rows_with_missing: u64,
     missing_by_field: BTreeMap<String, u64>,
     examples: Vec<serde_json::Value>,
@@ -94,7 +81,7 @@ pub struct RequiredFieldsState {
 impl RequiredFieldsState {
     pub fn new(cfg: &CheckConfig) -> Self {
         Self {
-            schema: None,
+            required: None,
             n_rows_with_missing: 0,
             missing_by_field: BTreeMap::new(),
             examples: Vec::new(),
@@ -108,22 +95,26 @@ impl Check for RequiredFieldsState {
         let Some(EncodedValue::Struct(info)) = get_field(row, "info") else {
             return;
         };
-        if self.schema.is_none() {
-            self.schema = Some(resolve_schema(info));
+        if self.required.is_none() {
+            let names: Vec<String> = info.iter().map(|(n, _)| n.clone()).collect();
+            self.required = Some(build_required(&names));
         }
-        let schema = self.schema.as_ref().unwrap();
+        let required = self.required.as_ref().unwrap();
 
-        // A required field is satisfied only if it is declared and its value is non-null.
-        let mut missing_here: Vec<String> = Vec::new();
-        for (field, idx) in schema {
-            let present = match idx {
-                Some(i) => !matches!(info.get(*i).map(|(_, v)| v), Some(EncodedValue::Null) | None),
-                None => false,
-            };
-            if !present {
-                missing_here.push(field.clone());
-            }
-        }
+        // Field names present in THIS row with a non-null value. Matching by name (not a
+        // cached position) keeps the check correct regardless of INFO field order, or if the
+        // reader ever omits absent fields instead of emitting them as Null.
+        let present: HashSet<&str> = info
+            .iter()
+            .filter(|(_, v)| !matches!(v, EncodedValue::Null))
+            .map(|(n, _)| n.as_str())
+            .collect();
+
+        let missing_here: Vec<String> = required
+            .iter()
+            .filter(|field| !present.contains(field.as_str()))
+            .cloned()
+            .collect();
 
         if !missing_here.is_empty() {
             self.n_rows_with_missing += 1;
@@ -146,8 +137,8 @@ impl Check for RequiredFieldsState {
                 self.examples.push(e);
             }
         }
-        if self.schema.is_none() {
-            self.schema = other.schema;
+        if self.required.is_none() {
+            self.required = other.required;
         }
     }
 

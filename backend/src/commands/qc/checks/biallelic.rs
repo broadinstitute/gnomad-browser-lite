@@ -182,9 +182,13 @@ mod tests {
         acc.process_row(&row("chr1", 200, &["AC", "A"]), &ctx);
 
         let results = acc.finalize(&ctx);
-        assert_eq!(results[0].status, Status::Pass);
-        assert_eq!(results[0].n_violations, 0);
-        assert!(results[0].examples.is_empty());
+        let r = results
+            .iter()
+            .find(|r| r.id == "fields.biallelic")
+            .expect("biallelic result present");
+        assert_eq!(r.status, Status::Pass);
+        assert_eq!(r.n_violations, 0);
+        assert!(r.examples.is_empty());
     }
 
     /// A direct exercise of the state to keep the `CheckState` wiring honest.

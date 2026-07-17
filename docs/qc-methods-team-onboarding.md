@@ -80,18 +80,23 @@ if you have none. The build uses sccache as its committed rustc wrapper
 (`backend/.cargo/config.toml`), so install it (see Prerequisites). To build without it,
 prefix each cargo command with `CARGO_BUILD_RUSTC_WRAPPER=""`.
 
-The binary is `backend/target/release/backend`, packaged as `gbl`. Alias it so the
-fixture verifier (which calls `gbl`) resolves it:
+The binary is `backend/target/release/backend`. Export its absolute path as `GBL`: the
+fixture verifier `run_checks.py` runs the binary as a subprocess and finds it through the
+`GBL` environment variable — a shell alias is invisible to a subprocess, so aliasing does
+not work here.
 
 ```bash
-alias gbl="$PWD/target/release/backend"
+export GBL="$PWD/target/release/backend"   # you are in backend/ from the step above
 ```
 
 ## 3. Run the checks against the fixtures
 
+Run from the repo root — the fixture paths below are repo-root-relative:
+
 ```bash
-gbl qc list
-gbl qc run examples/federation/partner-broken.vcf.bgz --out report.json
+cd ..
+"$GBL" qc list
+"$GBL" qc run examples/federation/partner-broken.vcf.bgz --out report.json
 (cd examples/federation && uv run run_checks.py)
 ```
 
@@ -127,7 +132,8 @@ is not registered. Registering a check turns its line into a PASS/FAIL/WARN resu
    cd backend
    cargo build --release
    cargo test qc
-   ./target/release/backend qc list
+   export GBL="$PWD/target/release/backend"
+   "$GBL" qc list
    (cd ../examples/federation && uv run run_checks.py)
    ```
 

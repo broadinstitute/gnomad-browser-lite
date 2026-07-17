@@ -58,7 +58,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Create worktree if requested
+# Resolve the project root (the worktree is created further down, AFTER the preflights,
+# so a missing sibling/DuckDB fails before we leave orphaned git state behind).
 if [[ -n "$WORKTREE_PATH" ]]; then
     # Convert to absolute path (works on macOS and Linux)
     if [[ "$WORKTREE_PATH" != /* ]]; then
@@ -66,21 +67,10 @@ if [[ -n "$WORKTREE_PATH" ]]; then
     fi
     WORKTREE_NAME="${WORKTREE_NAME:-$(basename "$WORKTREE_PATH")}"
     WORKTREE_BRANCH="${WORKTREE_BRANCH:-$WORKTREE_NAME}"
-
-    echo "Creating git worktree..."
-    echo "  Path: $WORKTREE_PATH"
-    echo "  Branch: $WORKTREE_BRANCH"
-    echo ""
-
-    cd "$MAIN_PROJECT"
-    git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_PATH"
-
     PROJECT_ROOT="$WORKTREE_PATH"
 else
     PROJECT_ROOT="$MAIN_PROJECT"
 fi
-
-cd "$PROJECT_ROOT"
 
 # Preflight: the backend and frontend depend on sibling repos by path
 # (backend/Cargo.toml -> ../../genohype/*, frontend/package.json -> ../../genohype/ui,
@@ -89,7 +79,9 @@ cd "$PROJECT_ROOT"
 # sibling (or the wrong fastVEP branch) produces.
 preflight_siblings() {
     local parent missing=0
-    parent="$(cd "$PROJECT_ROOT/.." && pwd)"
+    # dirname (not "$PROJECT_ROOT/..") because this runs before the worktree leaf dir
+    # exists; the parent dir does exist, so cd+pwd there canonicalizes it.
+    parent="$(cd "$(dirname "$PROJECT_ROOT")" && pwd)"
 
     if [[ ! -d "$parent/genohype/core" ]]; then
         echo "  MISSING: $parent/genohype  (backend crates + frontend assistant-ui)"
@@ -145,8 +137,28 @@ preflight_duckdb() {
     echo "  DuckDB library OK: $found"
 }
 
+# Run the preflights BEFORE creating the worktree so a missing sibling or DuckDB library
+# fails loud without leaving an orphaned worktree/branch behind.
 echo "Checking sibling repos..."
 preflight_siblings
+
+if [[ "$SKIP_BUILD" != "true" ]]; then
+    echo ""
+    echo "Checking DuckDB library..."
+    preflight_duckdb
+fi
+
+# Now safe to create the worktree.
+if [[ -n "$WORKTREE_PATH" ]]; then
+    echo ""
+    echo "Creating git worktree..."
+    echo "  Path: $WORKTREE_PATH"
+    echo "  Branch: $WORKTREE_BRANCH"
+    cd "$MAIN_PROJECT"
+    git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_PATH"
+fi
+
+cd "$PROJECT_ROOT"
 
 if [[ -n "$WORKTREE_NAME" ]]; then
     echo "Setting up worktree: $WORKTREE_NAME"
@@ -211,10 +223,6 @@ if [[ "$SKIP_BUILD" != "true" ]]; then
         echo "Building @genohype/assistant-ui..."
         (cd "$PARENT/genohype/ui" && npm install && npm run build -w @genohype/assistant-ui)
     fi
-
-    echo ""
-    echo "Checking DuckDB library..."
-    preflight_duckdb
 
     echo ""
     echo "Building backend..."

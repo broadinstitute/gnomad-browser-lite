@@ -3,6 +3,7 @@
 //! `META` and a `new` constructor, and wired into
 //! [`registry`](crate::commands::qc::framework::registry) with a single line.
 
+pub mod ac_le_an;
 pub mod biallelic;
 pub mod complete_chromosomes;
 pub mod contigs_grch38;

@@ -41,6 +41,21 @@ pub fn count_value(value: &EncodedValue) -> Option<i32> {
     }
 }
 
+/// Human label for a per-stratum INFO key suffix: `""` -> `"global"`,
+/// `"_afr_XX"` -> `"afr_XX"`. Used by the per-stratum arithmetic checks that pair
+/// `AC[_<suffix>]` with a sibling `AN`/`nhomalt` field.
+///
+/// Total for any `&str` on purpose: callers only ever pass `""` or a `_`-prefixed
+/// suffix (so `strip_prefix('_')` matches in practice), but the `unwrap_or` keeps
+/// it correct and panic-free rather than coupling it to a caller's guard.
+pub fn stratum_label(suffix: &str) -> &str {
+    if suffix.is_empty() {
+        "global"
+    } else {
+        suffix.strip_prefix('_').unwrap_or(suffix)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +79,12 @@ mod tests {
             ])),
             None
         );
+    }
+
+    #[test]
+    fn stratum_label_maps_suffix_to_label() {
+        assert_eq!(stratum_label(""), "global");
+        assert_eq!(stratum_label("_afr"), "afr");
+        assert_eq!(stratum_label("_afr_XX"), "afr_XX");
     }
 }
